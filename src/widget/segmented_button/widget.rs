@@ -1692,6 +1692,10 @@ where
                                 state.set_focused();
                                 state.focused_item = Item::Tab(key);
                                 state.pressed_item = None;
+                                // A click, not a drag. Returning skips the clear
+                                // on release below, and a stale candidate would
+                                // start a drag on the next distant pointer motion
+                                state.tab_drag_candidate = None;
                                 shell.capture_event();
                                 return;
                             }
