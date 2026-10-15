@@ -79,6 +79,8 @@ pub struct Scrollable<
     Renderer: text::Renderer,
 {
     id: Id,
+    explicit_id: bool,
+    initial_position: Position,
     scrollbar_id: Id,
     #[cfg(feature = "a11y")]
     name: Option<Cow<'a, str>>,
@@ -115,6 +117,8 @@ where
     ) -> Self {
         Scrollable {
             id: Id::unique(),
+            explicit_id: false,
+            initial_position: AbsoluteOffset::default().into(),
             scrollbar_id: Id::unique(),
             #[cfg(feature = "a11y")]
             name: None,
@@ -162,7 +166,25 @@ where
     /// Sets the [`widget::Id`] of the [`Scrollable`].
     pub fn id(mut self, id: impl Into<core::widget::Id>) -> Self {
         self.id = id.into();
+        self.explicit_id = true;
         self
+    }
+
+    /// Sets the position used when this widget's state is created, or when
+    /// a different explicit ID replaces it in the widget tree. Existing
+    /// state keeps its position, so rebuilding cannot undo a newer gesture.
+    pub fn initial_position(mut self, position: impl Into<Position>) -> Self {
+        self.initial_position = position.into();
+        self
+    }
+
+    fn initial_state(&self) -> State {
+        State {
+            owner: Some(self.id.clone()),
+            offset_x: self.initial_position.offset_x,
+            offset_y: self.initial_position.offset_y,
+            ..State::new()
+        }
     }
 
     /// Sets the width of the [`Scrollable`].
@@ -503,7 +525,7 @@ where
     }
 
     fn state(&self) -> tree::State {
-        tree::State::new(State::new())
+        tree::State::new(self.initial_state())
     }
 
     fn children(&self) -> Vec<Tree> {
@@ -511,6 +533,11 @@ where
     }
 
     fn diff(&mut self, tree: &mut Tree) {
+        let state = tree.state.downcast_mut::<State>();
+        if state.owner.as_ref() != Some(&self.id) {
+            *state = self.initial_state();
+            tree.id = Widget::id(self);
+        }
         tree.diff_children(std::slice::from_mut(&mut self.content));
     }
 
@@ -1752,7 +1779,9 @@ where
     fn set_id(&mut self, id: Id) {
         if let Id(Internal::Set(list)) = id {
             if list.len() == 2 {
-                self.id.0 = list[0].clone();
+                if !self.explicit_id {
+                    self.id.0 = list[0].clone();
+                }
                 self.scrollbar_id.0 = list[1].clone();
             }
         }
@@ -2035,10 +2064,13 @@ fn notify_viewport<Message>(
             && unchanged(last_absolute_offset.x, current_absolute_offset.x)
             && unchanged(last_absolute_offset.y, current_absolute_offset.y)
         {
-            // Notify a changed cause without treating it as movement. An
+            // Notify a changed cause or pin without treating it as movement. An
             // inner scroller at its boundary must still let the wheel reach
             // its parent when there is no active scroll transaction.
-            if last_notified.user_scrolled != user_scrolled {
+            if last_notified.user_scrolled != user_scrolled
+                || last_notified.offset_x != viewport.offset_x
+                || last_notified.offset_y != viewport.offset_y
+            {
                 state.last_notified = Some(viewport);
                 if let Some(on_scroll) = on_scroll {
                     shell.publish(on_scroll(viewport));
@@ -2056,8 +2088,9 @@ fn notify_viewport<Message>(
     true
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct State {
+    owner: Option<Id>,
     offset_y: Offset,
     offset_x: Offset,
     interaction: Interaction,
@@ -2085,6 +2118,7 @@ enum Interaction {
 impl Default for State {
     fn default() -> Self {
         Self {
+            owner: None,
             offset_y: Offset::Absolute(0.0),
             offset_x: Offset::Absolute(0.0),
             interaction: Interaction::None,
@@ -2161,6 +2195,15 @@ pub struct Viewport {
 }
 
 impl Viewport {
+    /// Saves the position, including a relative pin that follows content
+    /// growth, for restoring a view with [`Scrollable::initial_position`].
+    pub fn position(&self) -> Position {
+        Position {
+            offset_x: self.offset_x,
+            offset_y: self.offset_y,
+        }
+    }
+
     /// Whether a scroll gesture, scrollbar drag, or touch scroll caused
     /// this notification, rather than a redraw or layout change.
     pub fn is_user_scroll(&self) -> bool {
@@ -2217,6 +2260,32 @@ impl Viewport {
     /// Returns the content bounds of the current [`Viewport`].
     pub fn content_bounds(&self) -> Rectangle {
         self.content_bounds
+    }
+}
+
+/// A saved scroll position. Absolute offsets preserve a reading position;
+/// relative offsets preserve a pin as content or viewport size changes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Position {
+    offset_x: Offset,
+    offset_y: Offset,
+}
+
+impl From<AbsoluteOffset> for Position {
+    fn from(offset: AbsoluteOffset) -> Self {
+        Self {
+            offset_x: Offset::Absolute(offset.x),
+            offset_y: Offset::Absolute(offset.y),
+        }
+    }
+}
+
+impl From<RelativeOffset> for Position {
+    fn from(offset: RelativeOffset) -> Self {
+        Self {
+            offset_x: Offset::Relative(offset.x.clamp(0.0, 1.0)),
+            offset_y: Offset::Relative(offset.y.clamp(0.0, 1.0)),
+        }
     }
 }
 
