@@ -109,9 +109,10 @@ impl<Message: Clone + 'static> ContextMenu<'_, Message> {
                 SctkPopupSettings, SctkPositioner,
             };
 
-            let mut bounds = layout.bounds();
-            bounds.x = my_state.context_cursor.x;
-            bounds.y = my_state.context_cursor.y;
+            // Scrollables deliver the cursor in content coordinates. Native
+            // popups need coordinates on the parent surface instead.
+            let click = my_state.context_cursor - layout.virtual_offset();
+            let bounds = iced::Rectangle::new(click, Size::new(1.0, 1.0));
 
             let (id, root_list) = my_state.menu_bar_state.inner.with_data_mut(|state| {
                 if let Some(id) = state.popup_id.get(&self.window_id).copied() {
@@ -145,7 +146,7 @@ impl<Message: Clone + 'static> ContextMenu<'_, Message> {
                 item_width: self.item_width,
                 item_height: ItemHeight::Dynamic(40),
                 bar_bounds: bounds,
-                main_offset: -(bounds.height as i32),
+                main_offset: 0,
                 cross_offset: 0,
                 root_bounds_list: vec![bounds],
                 path_highlight: Some(PathHighlight::MenuActive),
@@ -161,18 +162,18 @@ impl<Message: Clone + 'static> ContextMenu<'_, Message> {
                 &mut popup_menu,
                 renderer,
                 shell,
-                view_cursor.position().unwrap(),
+                click,
                 viewport.size(),
                 Vector::new(0., 0.),
-                layout.bounds(),
-                -bounds.height,
+                bounds,
+                0.0,
             );
             let (anchor_rect, gravity) = my_state.menu_bar_state.inner.with_data_mut(|state| {
                 use iced::Rectangle;
 
                 state.popup_id.insert(self.window_id, id);
                 ({
-                    let pos = view_cursor.position().unwrap_or_default();
+                    let pos = click;
                     Rectangle {
                         x: pos.x as i32,
                         y: pos.y as i32,
@@ -198,7 +199,7 @@ impl<Message: Clone + 'static> ContextMenu<'_, Message> {
                 )),
                 anchor_rect,
                 anchor: cctk::wayland_protocols::xdg::shell::client::xdg_positioner::Anchor::None,
-                gravity: cctk::wayland_protocols::xdg::shell::client::xdg_positioner::Gravity::BottomRight,
+                gravity,
                 reactive: true,
                 ..Default::default()
             };
@@ -700,4 +701,115 @@ pub struct LocalState<Message> {
     roots: RcWrapper<Vec<menu::Tree<Message>>>,
     /// menu shape has changed, rebuild it on the next `update`
     reshape: bool,
+}
+
+#[cfg(all(test, wayland_platform))]
+mod tests {
+    use super::*;
+    use iced::advanced::renderer::Headless;
+    use iced_core::widget::operation::scrollable;
+    use iced_runtime::platform_specific::wayland::popup::SctkPopupSettings;
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    #[derive(Clone)]
+    enum Message {
+        Click,
+        Surface(crate::surface::Action<Self>),
+    }
+
+    #[test]
+    fn a_scrolled_session_menu_is_anchored_at_the_window_cursor() {
+        _ = WINDOWING_SYSTEM.set(WindowingSystem::Wayland);
+        let mut renderer = iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
+            iced::Font::default(),
+            iced::Pixels(14.0),
+            Some("tiny-skia"),
+        ))
+        .expect("a headless renderer");
+        let id = iced_core::widget::Id::unique();
+        let parent = window::Id::unique();
+        let rows = (0..40).map(|_| {
+            let row = crate::widget::container(crate::widget::text("Session"))
+                .width(Length::Fill)
+                .height(32);
+            let menu = vec![menu::Tree::new(crate::Element::from(
+                crate::widget::button::text("Open").on_press(Message::Click),
+            ))];
+            crate::Element::from(
+                context_menu(row, Some(menu))
+                    .window_id(parent)
+                    .on_surface_action(Message::Surface),
+            )
+        });
+        let element = crate::widget::scrollable(crate::widget::column(rows))
+            .id(id.clone())
+            .width(300)
+            .height(160);
+        let mut ui = UserInterface::build(
+            element,
+            Size::new(300.0, 160.0),
+            Cache::default(),
+            &mut renderer,
+        );
+        // The column and its session container must pass on the scroll offset.
+        // Exercise both zero offset and a far scrolled sidebar.
+        for offset in [0.0, 1.0] {
+            ui.operate(
+                &renderer,
+                &mut scrollable::snap_to(
+                    id.clone(),
+                    scrollable::RelativeOffset {
+                        x: None,
+                        y: Some(offset),
+                    },
+                ),
+            );
+            let click = Point::new(100.0, 100.0);
+            let mut messages = Vec::new();
+            _ = ui.update(
+                &[Event::Mouse(mouse::Event::ButtonReleased(
+                    mouse::Button::Right,
+                ))],
+                mouse::Cursor::Available(click),
+                &mut renderer,
+                &mut iced_core::clipboard::Null,
+                &mut messages,
+            );
+            let settings = messages
+                .iter()
+                .find_map(|message| match message {
+                    Message::Surface(crate::surface::Action::Popup(settings, _, _)) => {
+                        Some(settings)
+                    }
+                    _ => None,
+                })
+                .expect("a native popup");
+            let settings = settings
+                .downcast_ref::<Box<dyn Fn() -> SctkPopupSettings + Send + Sync>>()
+                .expect("popup settings")();
+            assert_eq!(settings.parent, parent);
+            assert_eq!(settings.positioner.anchor_rect.x, click.x as i32);
+            assert_eq!(settings.positioner.anchor_rect.y, click.y as i32);
+            assert_eq!(settings.positioner.anchor_rect.width, 1);
+            assert_eq!(settings.positioner.anchor_rect.height, 1);
+            // Close before clicking another row, as a user would.
+            _ = ui.update(
+                &[Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    modified_key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    physical_key: keyboard::key::Physical::Unidentified(
+                        keyboard::key::NativeCode::Unidentified,
+                    ),
+                    location: keyboard::Location::Standard,
+                    modifiers: keyboard::Modifiers::default(),
+                    text: None,
+                    repeat: false,
+                })],
+                mouse::Cursor::Available(click),
+                &mut renderer,
+                &mut iced_core::clipboard::Null,
+                &mut Vec::new(),
+            );
+        }
+    }
 }
