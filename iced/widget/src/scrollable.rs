@@ -1260,6 +1260,7 @@ where
                         bounds,
                         content_bounds,
                         shell,
+                        false,
                     );
                 }
                 _ => {}
@@ -1984,7 +1985,7 @@ fn notify_scroll<Message>(
     content_bounds: Rectangle,
     shell: &mut Shell<'_, Message>,
 ) -> bool {
-    if notify_viewport(state, on_scroll, bounds, content_bounds, shell) {
+    if notify_viewport(state, on_scroll, bounds, content_bounds, shell, true) {
         state.last_scrolled = Some(Instant::now());
 
         true
@@ -1999,6 +2000,7 @@ fn notify_viewport<Message>(
     bounds: Rectangle,
     content_bounds: Rectangle,
     shell: &mut Shell<'_, Message>,
+    user_scrolled: bool,
 ) -> bool {
     if content_bounds.width <= bounds.width
         && content_bounds.height <= bounds.height
@@ -2011,6 +2013,7 @@ fn notify_viewport<Message>(
         offset_y: state.offset_y,
         bounds,
         content_bounds,
+        user_scrolled,
     };
 
     // Don't publish redundant viewports to shell
@@ -2032,6 +2035,15 @@ fn notify_viewport<Message>(
             && unchanged(last_absolute_offset.x, current_absolute_offset.x)
             && unchanged(last_absolute_offset.y, current_absolute_offset.y)
         {
+            // Notify a changed cause without treating it as movement. An
+            // inner scroller at its boundary must still let the wheel reach
+            // its parent when there is no active scroll transaction.
+            if last_notified.user_scrolled != user_scrolled {
+                state.last_notified = Some(viewport);
+                if let Some(on_scroll) = on_scroll {
+                    shell.publish(on_scroll(viewport));
+                }
+            }
             return false;
         }
     }
@@ -2145,9 +2157,22 @@ pub struct Viewport {
     offset_y: Offset,
     bounds: Rectangle,
     content_bounds: Rectangle,
+    user_scrolled: bool,
 }
 
 impl Viewport {
+    /// Whether a scroll gesture, scrollbar drag, or touch scroll caused
+    /// this notification, rather than a redraw or layout change.
+    pub fn is_user_scroll(&self) -> bool {
+        self.user_scrolled
+    }
+
+    /// Whether the vertical offset is pinned to the end as content grows.
+    /// Manual scrolling replaces this pin with an absolute reading position.
+    pub fn is_pinned_to_end(&self) -> bool {
+        self.offset_y == Offset::Relative(1.0)
+    }
+
     /// Returns the [`AbsoluteOffset`] of the current [`Viewport`].
     pub fn absolute_offset(&self) -> AbsoluteOffset {
         let x = self
