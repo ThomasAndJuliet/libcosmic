@@ -188,6 +188,12 @@ where
     pub(super) drag_id: Option<DragId>,
     #[setters(skip)]
     pub(super) tab_drag: Option<TabDragSource<Message>>,
+    /// Builds the bytes a dragged tab carries, instead of a placeholder
+    #[setters(skip)]
+    pub(super) tab_drag_data: Option<Box<dyn Fn(Entity) -> Vec<u8> + 'static>>,
+    /// Emits the tab whose drag has started
+    #[setters(skip)]
+    pub(super) on_tab_drag_start: Option<Box<dyn Fn(Entity) -> Message + 'static>>,
     #[setters(skip)]
     pub(super) on_drop_hint: Option<Box<dyn Fn(Option<(Entity, bool)>) -> Message + 'static>>,
 
@@ -251,6 +257,8 @@ where
             variant: PhantomData,
             drag_id: None,
             tab_drag: None,
+            tab_drag_data: None,
+            on_tab_drag_start: None,
             on_drop_hint: None,
             on_reorder: None,
             window_id: window::Id::RESERVED,
@@ -368,6 +376,20 @@ where
     /// Enable drag-and-drop support for tabs using the provided payload builder.
     pub fn enable_tab_drag(mut self, mime: String) -> Self {
         self.tab_drag = Some(TabDragSource::new(mime));
+        self
+    }
+
+    /// Set the data a dragged tab offers under the tab drag mime type, so
+    /// that another application or process can tell which tab it received.
+    pub fn tab_drag_data(mut self, data: impl Fn(Entity) -> Vec<u8> + 'static) -> Self {
+        self.tab_drag_data = Some(Box::new(data));
+        self
+    }
+
+    /// Emit a message when a tab starts being dragged, so the application
+    /// knows which tab a later drag-and-drop source event refers to.
+    pub fn on_tab_drag_start(mut self, on_start: impl Fn(Entity) -> Message + 'static) -> Self {
+        self.on_tab_drag_start = Some(Box::new(on_start));
         self
     }
 
@@ -832,14 +854,18 @@ where
             tab_drag.threshold
         );
 
-        let data_len = 0;
+        let data = self
+            .tab_drag_data
+            .as_ref()
+            .map_or_else(|| vec![1], |data| data(entity));
+        let data_len = data.len();
 
         iced_core::clipboard::start_dnd::<crate::Theme, crate::Renderer>(
             clipboard,
             false,
             Some(iced_core::clipboard::DndSource::Widget(self.id.0.clone())),
             None,
-            Box::new(SimpleDragData::new(tab_drag.mime.clone(), vec![1])),
+            Box::new(SimpleDragData::new(tab_drag.mime.clone(), data)),
             DndAction::Move,
         );
         log::trace!(
@@ -1753,6 +1779,9 @@ where
                 position,
                 clipboard,
             ) {
+                if let Some(on_start) = self.on_tab_drag_start.as_ref() {
+                    shell.publish(on_start(candidate.entity));
+                }
                 shell.capture_event();
                 return;
             }
