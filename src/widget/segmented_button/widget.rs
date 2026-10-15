@@ -1123,110 +1123,15 @@ where
     }
 }
 
-impl<Variant, SelectionMode, Message> Widget<Message, crate::Theme, Renderer>
-    for SegmentedButton<'_, Variant, SelectionMode, Message>
+impl<Variant, SelectionMode, Message> SegmentedButton<'_, Variant, SelectionMode, Message>
 where
     Self: SegmentedVariant,
     Model<SelectionMode>: Selectable,
     SelectionMode: Default,
     Message: 'static + Clone,
 {
-    fn id(&self) -> Option<widget::Id> {
-        Some(self.id.0.clone())
-    }
-
-    fn set_id(&mut self, id: widget::Id) {
-        self.id = Id(id);
-    }
-
-    fn children(&self) -> Vec<Tree> {
-        let mut children = Vec::new();
-
-        // Assign the context menu's elements as this widget's children.
-        if let Some(ref context_menu) = self.context_menu {
-            let mut tree = Tree::empty();
-            tree.state = tree::State::new(MenuBarState::default());
-            tree.children = menu_roots_children(context_menu);
-            children.push(tree);
-        }
-
-        children
-    }
-
-    fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<LocalState>()
-    }
-
-    fn state(&self) -> tree::State {
-        #[allow(clippy::default_trait_access)]
-        tree::State::new(LocalState {
-            menu_state: Default::default(),
-            paragraphs: SecondaryMap::new(),
-            text_hashes: SecondaryMap::new(),
-            buttons_visible: Default::default(),
-            buttons_offset: Default::default(),
-            collapsed: Default::default(),
-            focused: Default::default(),
-            focused_item: Default::default(),
-            focused_visible: false,
-            hovered: Default::default(),
-            known_length: Default::default(),
-            middle_clicked: Default::default(),
-            internal_layout: Default::default(),
-            context_cursor: Point::default(),
-            show_context: Default::default(),
-            wheel_timestamp: Default::default(),
-            dnd_state: Default::default(),
-            fingers_pressed: Default::default(),
-            pressed_item: None,
-            tab_drag_candidate: None,
-            dragging_tab: None,
-            drop_hint: None,
-            offer_mimes: Vec::new(),
-        })
-    }
-
-    fn diff(&mut self, tree: &mut Tree) {
-        let state = tree.state.downcast_mut::<LocalState>();
-        for key in self.model.order.iter().copied() {
-            self.update_entity_paragraph(state, key);
-        }
-
-        // Diff the context menu
-        if let Some(context_menu) = &mut self.context_menu {
-            state.menu_state.inner.with_data_mut(|inner| {
-                menu_roots_diff(context_menu, &mut inner.tree);
-            });
-        }
-
-        // Unfocus if another segmented control was focused.
-        if let Some(f) = state.focused.as_ref()
-            && f.updated_at != LAST_FOCUS_UPDATE.with(|f| f.get())
-        {
-            state.unfocus();
-        }
-    }
-
-    fn size(&self) -> Size<Length> {
-        Size::new(self.width, self.height)
-    }
-
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        let state = tree.state.downcast_mut::<LocalState>();
-        let limits = limits.shrink(self.padding);
-        let size = self
-            .variant_layout(state, renderer, &limits)
-            .expand(self.padding);
-        layout::Node::new(size)
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn update(
+    #[allow(clippy::too_many_arguments)]
+    fn handle_event(
         &mut self,
         tree: &mut Tree,
         mut event: &Event,
@@ -1946,6 +1851,134 @@ where
         if hovered_before != state.hovered {
             shell.request_redraw();
         }
+    }
+
+}
+
+impl<Variant, SelectionMode, Message> Widget<Message, crate::Theme, Renderer>
+    for SegmentedButton<'_, Variant, SelectionMode, Message>
+where
+    Self: SegmentedVariant,
+    Model<SelectionMode>: Selectable,
+    SelectionMode: Default,
+    Message: 'static + Clone,
+{
+    fn id(&self) -> Option<widget::Id> {
+        Some(self.id.0.clone())
+    }
+
+    fn set_id(&mut self, id: widget::Id) {
+        self.id = Id(id);
+    }
+
+    fn children(&self) -> Vec<Tree> {
+        let mut children = Vec::new();
+
+        // Assign the context menu's elements as this widget's children.
+        if let Some(ref context_menu) = self.context_menu {
+            let mut tree = Tree::empty();
+            tree.state = tree::State::new(MenuBarState::default());
+            tree.children = menu_roots_children(context_menu);
+            children.push(tree);
+        }
+
+        children
+    }
+
+    fn tag(&self) -> tree::Tag {
+        tree::Tag::of::<LocalState>()
+    }
+
+    fn state(&self) -> tree::State {
+        #[allow(clippy::default_trait_access)]
+        tree::State::new(LocalState {
+            menu_state: Default::default(),
+            paragraphs: SecondaryMap::new(),
+            text_hashes: SecondaryMap::new(),
+            buttons_visible: Default::default(),
+            buttons_offset: Default::default(),
+            collapsed: Default::default(),
+            focused: Default::default(),
+            focused_item: Default::default(),
+            focused_visible: false,
+            hovered: Default::default(),
+            known_length: Default::default(),
+            middle_clicked: Default::default(),
+            internal_layout: Default::default(),
+            context_cursor: Point::default(),
+            show_context: Default::default(),
+            wheel_timestamp: Default::default(),
+            dnd_state: Default::default(),
+            fingers_pressed: Default::default(),
+            pressed_item: None,
+            tab_drag_candidate: None,
+            dragging_tab: None,
+            drop_hint: None,
+            offer_mimes: Vec::new(),
+        })
+    }
+
+    fn diff(&mut self, tree: &mut Tree) {
+        let state = tree.state.downcast_mut::<LocalState>();
+        for key in self.model.order.iter().copied() {
+            self.update_entity_paragraph(state, key);
+        }
+
+        // Diff the context menu
+        if let Some(context_menu) = &mut self.context_menu {
+            state.menu_state.inner.with_data_mut(|inner| {
+                menu_roots_diff(context_menu, &mut inner.tree);
+            });
+        }
+
+        // Unfocus if another segmented control was focused.
+        if let Some(f) = state.focused.as_ref()
+            && f.updated_at != LAST_FOCUS_UPDATE.with(|f| f.get())
+        {
+            state.unfocus();
+        }
+    }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(self.width, self.height)
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let state = tree.state.downcast_mut::<LocalState>();
+        let limits = limits.shrink(self.padding);
+        let size = self
+            .variant_layout(state, renderer, &limits)
+            .expand(self.padding);
+        layout::Node::new(size)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor_position: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        viewport: &iced::Rectangle,
+    ) {
+        self.handle_event(
+            tree,
+            event,
+            layout,
+            cursor_position,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
     }
 
     fn operate(
