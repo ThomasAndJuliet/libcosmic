@@ -194,6 +194,10 @@ where
     /// Emits the tab whose drag has started
     #[setters(skip)]
     pub(super) on_tab_drag_start: Option<Box<dyn Fn(Entity) -> Message + 'static>>,
+    /// Emits the tab the pointer is over, or `None`, when that changes
+    #[setters(skip)]
+    /// Told the tab under the pointer, and its centre from the left edge
+    pub(super) on_tab_hover: Option<Box<dyn Fn(Option<(Entity, f32)>) -> Message + 'static>>,
     #[setters(skip)]
     pub(super) on_drop_hint: Option<Box<dyn Fn(Option<(Entity, bool)>) -> Message + 'static>>,
 
@@ -259,6 +263,7 @@ where
             tab_drag: None,
             tab_drag_data: None,
             on_tab_drag_start: None,
+            on_tab_hover: None,
             on_drop_hint: None,
             on_reorder: None,
             window_id: window::Id::RESERVED,
@@ -390,6 +395,13 @@ where
     /// knows which tab a later drag-and-drop source event refers to.
     pub fn on_tab_drag_start(mut self, on_start: impl Fn(Entity) -> Message + 'static) -> Self {
         self.on_tab_drag_start = Some(Box::new(on_start));
+        self
+    }
+
+    /// Emit a message when the pointer moves onto a tab or off the tabs, as
+    /// for showing a preview of the hovered tab
+    pub fn on_tab_hover(mut self, on_hover: impl Fn(Option<(Entity, f32)>) -> Message + 'static) -> Self {
+        self.on_tab_hover = Some(Box::new(on_hover));
         self
     }
 
@@ -1931,6 +1943,7 @@ where
             focused_item: Default::default(),
             focused_visible: false,
             hovered: Default::default(),
+            hover_reported: None,
             known_length: Default::default(),
             middle_clicked: Default::default(),
             internal_layout: Default::default(),
@@ -2008,6 +2021,30 @@ where
             shell,
             viewport,
         );
+        // Tell the application which tab the pointer is over, whichever way
+        // the event was handled
+        let state = tree.state.downcast_mut::<LocalState>();
+        let hovered = match state.hovered {
+            Item::Tab(entity) => Some(entity),
+            _ => None,
+        };
+        if hovered != state.hover_reported {
+            state.hover_reported = hovered;
+            if let Some(on_tab_hover) = self.on_tab_hover.as_ref() {
+                let bounds = layout.bounds();
+                let at = hovered.map(|entity| {
+                    let centre = self
+                        .variant_bounds(state, bounds)
+                        .find_map(|item| match item {
+                            ItemBounds::Button(e, b) if e == entity => Some(b.center_x() - bounds.x),
+                            _ => None,
+                        })
+                        .unwrap_or(bounds.width / 2.0);
+                    (entity, centre)
+                });
+                shell.publish(on_tab_hover(at));
+            }
+        }
     }
 
     fn operate(
@@ -2819,6 +2856,8 @@ pub struct LocalState {
     focused_item: Item,
     /// The ID of the button that is being hovered. Defaults to null.
     hovered: Item,
+    /// The hovered tab as last told to the application
+    hover_reported: Option<Entity>,
     /// The ID of the button that was middle-clicked, but not yet released.
     middle_clicked: Option<Item>,
     /// Last known length of the model.
@@ -2965,6 +3004,7 @@ mod tests {
             focused_item: Item::default(),
             focused_visible: false,
             hovered: Item::default(),
+            hover_reported: None,
             known_length: 0,
             middle_clicked: None,
             internal_layout: Vec::new(),
