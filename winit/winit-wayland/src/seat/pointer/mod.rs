@@ -47,7 +47,13 @@ impl PointerHandler for WinitState {
         pointer: &WlPointer,
         events: &[PointerEvent],
     ) {
-        let seat = pointer.winit_data().seat();
+        // Events still queued for a pointer released when the seat lost its
+        // pointer capability arrive on a dead proxy, which has no data.
+        let Some(pointer_data) = pointer.data::<WinitPointerData>() else {
+            warn!("Received pointer event for a released pointer");
+            return;
+        };
+        let seat = pointer_data.seat();
         let seat_state = match self.seats.get(&seat.id()) {
             Some(seat_state) => seat_state,
             None => {
