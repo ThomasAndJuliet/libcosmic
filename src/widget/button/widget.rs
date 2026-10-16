@@ -50,6 +50,8 @@ pub struct Button<'a, Message> {
     width: Length,
     height: Length,
     padding: Padding,
+    align_x: Alignment,
+    align_y: Alignment,
     selected: bool,
     style: crate::theme::Button,
     variant: Variant<Message>,
@@ -73,6 +75,8 @@ impl<'a, Message: Clone + 'a> Button<'a, Message> {
             width: Length::Shrink,
             height: Length::Shrink,
             padding: Padding::new(5.0),
+            align_x: Alignment::Start,
+            align_y: Alignment::Start,
             selected: false,
             style: crate::theme::Button::default(),
             variant: Variant::Normal,
@@ -99,6 +103,8 @@ impl<'a, Message: Clone + 'a> Button<'a, Message> {
             width: Length::Shrink,
             height: Length::Shrink,
             padding: Padding::new(5.0),
+            align_x: Alignment::Start,
+            align_y: Alignment::Start,
             selected: false,
             style: crate::theme::Button::default(),
             variant: Variant::Image {
@@ -140,6 +146,22 @@ impl<'a, Message: Clone + 'a> Button<'a, Message> {
     #[inline]
     pub fn padding<P: Into<Padding>>(mut self, padding: P) -> Self {
         self.padding = padding.into();
+        self
+    }
+
+    /// Sets where the content sits across a [`Button`] wider than it.
+    /// The default is [`Alignment::Start`].
+    #[inline]
+    pub fn align_x(mut self, align: Alignment) -> Self {
+        self.align_x = align;
+        self
+    }
+
+    /// Sets where the content sits in a [`Button`] taller than it.
+    /// The default is [`Alignment::Start`].
+    #[inline]
+    pub fn align_y(mut self, align: Alignment) -> Self {
+        self.align_y = align;
         self
     }
 
@@ -321,12 +343,14 @@ impl<'a, Message: 'a + Clone> Widget<Message, crate::Theme, crate::Renderer>
         renderer: &crate::Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        layout(
+        layout_aligned(
             renderer,
             limits,
             self.width,
             self.height,
             self.padding,
+            self.align_x,
+            self.align_y,
             |renderer, limits| {
                 self.content
                     .as_widget_mut()
@@ -1020,16 +1044,49 @@ pub fn layout<Renderer>(
     padding: Padding,
     layout_content: impl FnOnce(&Renderer, &layout::Limits) -> layout::Node,
 ) -> layout::Node {
+    layout_aligned(
+        renderer,
+        limits,
+        width,
+        height,
+        padding,
+        Alignment::Start,
+        Alignment::Start,
+        layout_content,
+    )
+}
+
+/// [`layout`], with the content placed in the space inside the padding.
+#[allow(clippy::too_many_arguments)]
+fn layout_aligned<Renderer>(
+    renderer: &Renderer,
+    limits: &layout::Limits,
+    width: Length,
+    height: Length,
+    padding: Padding,
+    align_x: Alignment,
+    align_y: Alignment,
+    layout_content: impl FnOnce(&Renderer, &layout::Limits) -> layout::Node,
+) -> layout::Node {
     let limits = limits.width(width).height(height);
 
-    let mut content = layout_content(renderer, &limits.shrink(padding));
+    // Content to be placed is laid out at its own size, as in a container;
+    // otherwise a fixed width or height would stretch it to the full space.
+    let content_limits = if align_x == Alignment::Start && align_y == Alignment::Start {
+        limits.shrink(padding)
+    } else {
+        limits.shrink(padding).loose()
+    };
+    let mut content = layout_content(renderer, &content_limits);
     let padding = padding.fit(content.size(), limits.max());
-    let size = limits
+    let inner = limits
         .shrink(padding)
-        .resolve(width, height, content.size())
-        .expand(padding);
+        .resolve(width, height, content.size());
+    let size = inner.expand(padding);
 
-    content = content.move_to(Point::new(padding.left, padding.top));
+    content = content
+        .move_to(Point::new(padding.left, padding.top))
+        .align(align_x, align_y, inner);
 
     layout::Node::with_children(size, vec![content])
 }
