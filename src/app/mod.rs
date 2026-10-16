@@ -220,6 +220,8 @@ where
     }
 
     let path: String = format!("/{}", App::APP_ID.replace('.', "/"));
+    let name = settings.single_instance_name.clone();
+    let bus_name = name.as_deref().unwrap_or(App::APP_ID);
 
     let Ok(conn) = zbus::blocking::Connection::session() else {
         tracing::warn!("Failed to connect to dbus");
@@ -227,10 +229,10 @@ where
     };
 
     if crate::dbus_activation::DbusActivationInterfaceProxyBlocking::builder(&conn)
-        .destination(App::APP_ID)
+        .destination(bus_name)
         .ok()
         .and_then(|b| b.path(path).ok())
-        .and_then(|b| b.destination(App::APP_ID).ok())
+        .and_then(|b| b.destination(bus_name).ok())
         .and_then(|b| b.build().ok())
         .is_some_and(|mut p| {
             let res = {
@@ -265,6 +267,7 @@ where
     } else {
         let (settings, (mut core, flags), window_settings) = iced_settings::<App>(settings, flags);
         core.single_instance = true;
+        core.single_instance_name = name;
 
         #[cfg(not(feature = "multi-window"))]
         {

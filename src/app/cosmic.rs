@@ -709,7 +709,9 @@ where
 
         #[cfg(feature = "single-instance")]
         if self.app.core().single_instance {
-            subscriptions.push(crate::dbus_activation::subscription::<T>());
+            subscriptions.push(crate::dbus_activation::subscription_named::<T>(
+                self.app.core().single_instance_name.as_deref().unwrap_or(T::APP_ID),
+            ));
         }
 
         // Drives the text context-menu popup queues: a right-click queues a

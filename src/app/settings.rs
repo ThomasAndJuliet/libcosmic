@@ -65,6 +65,12 @@ pub struct Settings {
 
     /// Whether the application should act as a daemon
     pub(crate) is_daemon: bool,
+
+    /// The bus name `run_single_instance` owns and hands launches to, if
+    /// not the app id
+    #[cfg(feature = "single-instance")]
+    #[setters(skip)]
+    pub(crate) single_instance_name: Option<String>,
 }
 
 impl Settings {
@@ -72,6 +78,19 @@ impl Settings {
     pub fn default_icon_theme(mut self, value: impl Into<String>) -> Self {
         let value: String = value.into();
         self.default_icon_theme = if value.is_empty() { None } else { Some(value) };
+        self
+    }
+
+    /// Sets the D-Bus name that [`crate::app::run_single_instance`] owns,
+    /// and that later launches hand their arguments to, in place of
+    /// `Application::APP_ID`; so a development build can have an instance
+    /// of its own while sharing the app id, config and Wayland app id.
+    /// Passing an empty string goes back to the app id. The object path
+    /// stays the one made from the app id.
+    #[cfg(feature = "single-instance")]
+    pub fn single_instance_name(mut self, value: impl Into<String>) -> Self {
+        let value: String = value.into();
+        self.single_instance_name = if value.is_empty() { None } else { Some(value) };
         self
     }
 }
@@ -100,6 +119,8 @@ impl Default for Settings {
             transparent: true,
             exit_on_close: true,
             is_daemon: true,
+            #[cfg(feature = "single-instance")]
+            single_instance_name: None,
         }
     }
 }

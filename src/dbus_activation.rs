@@ -13,8 +13,19 @@ use zbus::{interface, proxy};
 
 #[cold]
 pub fn subscription<App: ApplicationExt>() -> Subscription<crate::Action<App::Message>> {
+    subscription_named::<App>(App::APP_ID)
+}
+
+/// [`subscription`], owning the bus name `name` rather than the app id.
+/// The object path is still the one made from the app id.
+#[cold]
+pub fn subscription_named<App: ApplicationExt>(
+    name: &str,
+) -> Subscription<crate::Action<App::Message>> {
     use iced_futures::futures::StreamExt;
-    iced_futures::Subscription::run_with(TypeId::of::<DbusActivation>(), |_| {
+    let data = (TypeId::of::<DbusActivation>(), name.to_owned());
+    iced_futures::Subscription::run_with(data, |(_, name)| {
+        let name = name.clone();
         iced::stream::channel(
             10,
             move |mut output: Sender<crate::Action<App::Message>>| async move {
@@ -38,7 +49,7 @@ pub fn subscription<App: ApplicationExt>() -> Subscription<crate::Action<App::Me
                             tracing::error!("Failed to serve dbus");
                             std::process::exit(1);
                         }
-                        if conn.request_name(App::APP_ID).await.is_err() {
+                        if conn.request_name(name.as_str()).await.is_err() {
                             tracing::error!("Failed to serve dbus");
                             std::process::exit(1);
                         }

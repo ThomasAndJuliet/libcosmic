@@ -108,6 +108,10 @@ pub struct Core {
     #[cfg(feature = "single-instance")]
     pub(crate) single_instance: bool,
 
+    /// The bus name the single instance owns, if not the app id
+    #[cfg(feature = "single-instance")]
+    pub(crate) single_instance_name: Option<String>,
+
     #[cfg(all(feature = "dbus-config", target_os = "linux"))]
     pub(crate) settings_daemon: Option<cosmic_settings_daemon::CosmicSettingsDaemonProxy<'static>>,
 
@@ -184,6 +188,8 @@ impl Default for Core {
             applet: crate::applet::Context::default(),
             #[cfg(feature = "single-instance")]
             single_instance: false,
+            #[cfg(feature = "single-instance")]
+            single_instance_name: None,
             #[cfg(all(feature = "dbus-config", target_os = "linux"))]
             settings_daemon: None,
             portal_is_dark: None,
