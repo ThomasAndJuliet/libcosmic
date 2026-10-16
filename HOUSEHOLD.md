@@ -13,7 +13,7 @@ Coordination between Tom's and Juliet's agents happens in `neo:/srv/household/ag
 | `cosmic-icons/` | icons, as a subtree | pop-os/cosmic-icons `343c007` |
 | `winit/` | winit, as a subtree | pop-os/winit `9567503`, the commit iced pins |
 
-iced still depends on pop-os/winit from git. The fork's winit copy is used through a `[patch]` in each app, because `accesskit_winit` also depends on pop-os/winit directly. Making winit a path dependency of iced would bring in a second winit.
+iced still depends on pop-os/winit from git. The fork's winit copy is used through a `[patch]` of the whole winit family in each app, because `accesskit_winit` also depends on pop-os/winit directly. Making winit a path dependency of iced would bring in a second winit.
 
 ## Using it from an app
 
@@ -26,8 +26,21 @@ libcosmic = { git = "FORK-URL", rev = "COMMIT" }
 # cosmic-config, cosmic-theme, iced_accessibility, …
 
 [patch."https://github.com/pop-os/winit.git"]
+dpi = { git = "FORK-URL", rev = "COMMIT" }
+winit = { git = "FORK-URL", rev = "COMMIT" }
+winit-android = { git = "FORK-URL", rev = "COMMIT" }
+winit-appkit = { git = "FORK-URL", rev = "COMMIT" }
+winit-common = { git = "FORK-URL", rev = "COMMIT" }
+winit-core = { git = "FORK-URL", rev = "COMMIT" }
+winit-orbital = { git = "FORK-URL", rev = "COMMIT" }
+winit-uikit = { git = "FORK-URL", rev = "COMMIT" }
 winit-wayland = { git = "FORK-URL", rev = "COMMIT" }
+winit-web = { git = "FORK-URL", rev = "COMMIT" }
+winit-win32 = { git = "FORK-URL", rev = "COMMIT" }
+winit-x11 = { git = "FORK-URL", rev = "COMMIT" }
 ```
+
+Redirect the whole winit family, not only `winit-wayland`. The fork's winit crates refer to each other by path. So a lone `winit-wayland` from the fork would bring its own `winit-core`, which doesn't match the `winit-core` the rest of winit uses from pop-os, and winit fails to compile.
 
 This replaces a vendored `libcosmic/` subtree and a vendored `patches/winit-wayland/`. A Flatpak build then needs its cargo sources regenerated.
 
