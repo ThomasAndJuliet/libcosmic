@@ -48,6 +48,7 @@ pub enum Layer {
     cosmic_config::cosmic_config_derive::CosmicConfigEntry,
 )]
 #[version = 2]
+#[cosmic_config_entry(default_with = Self::saved_mode_default)]
 pub struct Theme {
     /// name of the theme
     pub name: String,
@@ -767,6 +768,37 @@ impl Theme {
         })()
         .map_err(|error| (vec![error], Self::default()))
         .and_then(|theme_config| Self::get_entry(&theme_config))
+    }
+
+    /// The built-in theme of the mode a saved theme says it is, to stand in for the fields it
+    /// lacks: a light theme saved without some of them would otherwise be filled in dark
+    fn saved_mode_default(config: &Config) -> Self {
+        let saved = |key| cosmic_config::ConfigGet::get::<bool>(config, key);
+        match (saved("is_dark"), saved("is_high_contrast").unwrap_or(false)) {
+            (Ok(true), false) => Self::dark_default(),
+            (Ok(false), false) => Self::light_default(),
+            (Ok(true), true) => Self::high_contrast_dark_default(),
+            (Ok(false), true) => Self::high_contrast_light_default(),
+            (Err(_), _) => Self::default(),
+        }
+    }
+
+    /// The saved theme of one mode (`config` is [`Self::dark_config`] or [`Self::light_config`]).
+    /// Fields it lacks come from the built-in theme of that mode, and so does the whole theme
+    /// when it does not say it is of that mode (the desktop never saved it).
+    #[allow(clippy::result_large_err)]
+    pub fn get_entry_for_mode(
+        config: &Config,
+        is_dark: bool,
+    ) -> Result<Self, (Vec<cosmic_config::Error>, Self)> {
+        let of_mode = |theme: Self| match (theme.is_dark == is_dark, is_dark) {
+            (true, _) => theme,
+            (false, true) => Self::dark_default(),
+            (false, false) => Self::light_default(),
+        };
+        Self::get_entry(config)
+            .map(of_mode)
+            .map_err(|(errors, theme)| (errors, of_mode(theme)))
     }
 
     /// Rebuild the current theme with the provided accent
@@ -1826,5 +1858,63 @@ impl Default for AlphaMap {
             extremely_high: 0.62308,
             extremely_high_2: 0.6,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cosmic_config::ConfigSet;
+
+    /// A theme config of its own, in an empty directory
+    fn config(name: &str) -> (Config, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("cosmic-theme-{}-{name}", std::process::id()));
+        _ = std::fs::remove_dir_all(&dir);
+        let config = Config::with_custom_path(LIGHT_THEME_ID, Theme::VERSION, dir.clone()).unwrap();
+        (config, dir)
+    }
+
+    fn entry(config: &Config) -> Theme {
+        Theme::get_entry(config).unwrap_or_else(|(_, theme)| theme)
+    }
+
+    #[test]
+    fn missing_fields_come_from_the_saved_mode() {
+        let (config, dir) = config("partial");
+        config.set("is_dark", false).unwrap();
+        assert_eq!(entry(&config), Theme::light_default());
+
+        config.set("gaps", (3_u32, 5_u32)).unwrap();
+        let mut expected = Theme::light_default();
+        expected.gaps = (3, 5);
+        assert_eq!(entry(&config), expected);
+
+        config.set("is_dark", true).unwrap();
+        expected = Theme::dark_default();
+        expected.gaps = (3, 5);
+        assert_eq!(entry(&config), expected);
+
+        config.set("is_high_contrast", true).unwrap();
+        expected = Theme::high_contrast_dark_default();
+        expected.gaps = (3, 5);
+        assert_eq!(entry(&config), expected);
+        _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_theme_never_saved_is_the_built_in_one_of_its_mode() {
+        let (config, dir) = config("empty");
+        let light = Theme::get_entry_for_mode(&config, false).unwrap_or_else(|(_, t)| t);
+        assert_eq!(light, Theme::light_default());
+        let dark = Theme::get_entry_for_mode(&config, true).unwrap_or_else(|(_, t)| t);
+        assert_eq!(dark, Theme::dark_default());
+
+        // A saved theme of the mode is kept
+        config.set("is_dark", false).unwrap();
+        config.set("active_hint", 7_u32).unwrap();
+        let light = Theme::get_entry_for_mode(&config, false).unwrap_or_else(|(_, t)| t);
+        assert_eq!(light.active_hint, 7);
+        assert!(!light.is_dark);
+        _ = std::fs::remove_dir_all(dir);
     }
 }

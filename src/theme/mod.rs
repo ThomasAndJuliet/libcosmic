@@ -8,7 +8,7 @@ pub mod portal;
 pub mod style;
 
 use ::iced::Alignment;
-use cosmic_config::{CosmicConfigEntry, config_subscription};
+use cosmic_config::config_subscription;
 use cosmic_theme::{Component, LayeredTheme, Spacing, ThemeMode};
 use iced_futures::Subscription;
 use iced_runtime::{Appearance, DefaultStyle};
@@ -97,12 +97,14 @@ pub fn system_dark() -> Theme {
         return Theme::dark();
     };
 
-    let t = crate::cosmic_theme::Theme::get_entry(&helper).unwrap_or_else(|(errors, theme)| {
-        for error in errors.into_iter().filter(cosmic_config::Error::is_err) {
-            tracing::error!(?error, "error loading system dark theme");
-        }
-        theme
-    });
+    let t = crate::cosmic_theme::Theme::get_entry_for_mode(&helper, true).unwrap_or_else(
+        |(errors, theme)| {
+            for error in errors.into_iter().filter(cosmic_config::Error::is_err) {
+                tracing::error!(?error, "error loading system dark theme");
+            }
+            theme
+        },
+    );
 
     Theme::system(Arc::new(t))
 }
@@ -112,12 +114,14 @@ pub fn system_light() -> Theme {
         return Theme::light();
     };
 
-    let t = crate::cosmic_theme::Theme::get_entry(&helper).unwrap_or_else(|(errors, theme)| {
-        for error in errors.into_iter().filter(cosmic_config::Error::is_err) {
-            tracing::error!(?error, "error loading system light theme");
-        }
-        theme
-    });
+    let t = crate::cosmic_theme::Theme::get_entry_for_mode(&helper, false).unwrap_or_else(
+        |(errors, theme)| {
+            for error in errors.into_iter().filter(cosmic_config::Error::is_err) {
+                tracing::error!(?error, "error loading system light theme");
+            }
+            theme
+        },
+    );
 
     Theme::system(Arc::new(t))
 }

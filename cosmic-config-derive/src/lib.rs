@@ -26,8 +26,30 @@ fn get_cosmic_config_attrs(field: &syn::Field) -> Result<Option<syn::Type>, syn:
     Ok(with)
 }
 
+/// A struct's `#[cosmic_config_entry(default_with = path)]`: a `fn(&Config) -> Self` giving
+/// the value whose fields stand in for keys the config lacks, in place of `Self::default()`
+fn get_default_with(attrs: &[syn::Attribute]) -> Result<Option<syn::Path>, syn::Error> {
+    let mut default_with = None;
+    for attr in attrs {
+        if attr.path().is_ident("cosmic_config_entry") {
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("default_with") {
+                    default_with = Some(meta.value()?.parse()?);
+                }
+                Ok(())
+            })?;
+        }
+    }
+    Ok(default_with)
+}
+
 fn impl_cosmic_config_entry_macro(ast: &syn::DeriveInput) -> TokenStream {
     let attributes = &ast.attrs;
+    let make_default = match get_default_with(attributes) {
+        Ok(Some(default_with)) => quote! { #default_with(config) },
+        Ok(None) => quote! { Self::default() },
+        Err(e) => return e.to_compile_error().into(),
+    };
     let version = attributes
         .iter()
         .find_map(|attr| {
@@ -190,7 +212,7 @@ fn impl_cosmic_config_entry_macro(ast: &syn::DeriveInput) -> TokenStream {
             }
 
             fn get_entry(config: &cosmic_config::Config) -> Result<Self, (Vec<cosmic_config::Error>, Self)> {
-                let mut default = Self::default();
+                let mut default = #make_default;
                 let mut errors = Vec::new();
 
                 #(#get_each_config_field)*
