@@ -249,7 +249,7 @@ where
 
     let menu = Menu {
         tree: menu_bar_state.clone(),
-        menu_roots: Cow::Owned(menu_roots),
+        menu_roots,
         bounds_expand: 16,
         menu_overlays_parent: true,
         close_condition: CloseCondition {
@@ -533,7 +533,7 @@ pub(crate) fn create_text_context_popup(
 
     let mut popup_menu: Menu<'static, TextCtxAction> = Menu {
         tree: menu_bar_state.clone(),
-        menu_roots: Cow::Owned(menu_roots),
+        menu_roots,
         bounds_expand: 16,
         menu_overlays_parent: true,
         close_condition: CloseCondition {

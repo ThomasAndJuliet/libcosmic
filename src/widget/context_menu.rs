@@ -135,7 +135,7 @@ impl<Message: Clone + 'static> ContextMenu<'_, Message> {
 
             let mut popup_menu: Menu<'static, _> = Menu {
                 tree: my_state.menu_bar_state.clone(),
-                menu_roots: std::borrow::Cow::Owned(context_menu.clone()),
+                menu_roots: context_menu.clone(),
                 bounds_expand: 16,
                 menu_overlays_parent: true,
                 close_condition: CloseCondition {
@@ -234,7 +234,7 @@ impl<Message: Clone + 'static> ContextMenu<'_, Message> {
                         // Latest roots from the owner widget
                         let mut popup_menu = popup_menu.clone();
                         popup_menu.menu_roots =
-                            std::borrow::Cow::Owned(roots.with_data(Clone::clone));
+                            roots.with_data(Clone::clone);
                         crate::Element::from(
                             crate::widget::container(popup_menu).center(Length::Fill),
                         )
@@ -638,7 +638,7 @@ impl<Message: 'static + Clone> Widget<Message, crate::Theme, crate::Renderer>
         let bounds = iced::Rectangle::new(state.context_cursor, Size::new(1.0, 1.0));
         let menu = crate::widget::menu::Menu {
             tree: state.menu_bar_state.clone(),
-            menu_roots: std::borrow::Cow::Owned(context_menu.clone()),
+            menu_roots: context_menu.clone(),
             bounds_expand: 16,
             menu_overlays_parent: true,
             close_condition: CloseCondition {

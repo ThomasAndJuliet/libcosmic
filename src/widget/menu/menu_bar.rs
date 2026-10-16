@@ -400,7 +400,7 @@ where
 
             let mut popup_menu: Menu<'static, _> = Menu {
                 tree: my_state.clone(),
-                menu_roots: std::borrow::Cow::Owned(self.menu_roots.clone()),
+                menu_roots: self.menu_roots.clone(),
                 bounds_expand: self.bounds_expand,
                 menu_overlays_parent: false,
                 close_condition: self.close_condition,
@@ -799,7 +799,7 @@ where
         Some(
             Menu {
                 tree: state.clone(),
-                menu_roots: std::borrow::Cow::Owned(self.menu_roots.clone()),
+                menu_roots: self.menu_roots.clone(),
                 bounds_expand: self.bounds_expand,
                 menu_overlays_parent: false,
                 close_condition: self.close_condition,

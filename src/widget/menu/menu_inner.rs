@@ -435,8 +435,8 @@ impl MenuState {
 #[derive(Clone)]
 pub(crate) struct Menu<'b, Message: std::clone::Clone> {
     pub(crate) tree: MenuBarState,
-    // Flattened menu tree
-    pub(crate) menu_roots: Cow<'b, [MenuTree<Message>]>,
+    // Event handling mutates the flattened menu tree, so every menu owns its roots.
+    pub(crate) menu_roots: Vec<MenuTree<Message>>,
     pub(crate) bounds_expand: u16,
     /// Allows menu overlay items to overlap the parent
     pub(crate) menu_overlays_parent: bool,
@@ -616,10 +616,6 @@ impl<'b, Message: Clone + 'static> Menu<'b, Message> {
         let viewport_size = viewport.size();
         let overlay_offset = Point::ORIGIN - viewport.position();
         let overlay_cursor = view_cursor.position().unwrap_or_default() - overlay_offset;
-        let menu_roots = match &mut self.menu_roots {
-            Cow::Borrowed(_) => panic!(),
-            Cow::Owned(o) => o.as_mut_slice(),
-        };
         process_menu_events(
             self,
             event,
@@ -1073,7 +1069,7 @@ impl<Message: std::clone::Clone + 'static> Widget<Message, crate::Theme, crate::
 
                 let mut popup_menu = Menu {
                     tree: self.tree.clone(),
-                    menu_roots: Cow::Owned(Cow::into_owned(self.menu_roots.clone())),
+                    menu_roots: self.menu_roots.clone(),
                     bounds_expand: self.bounds_expand,
                     menu_overlays_parent: false,
                     close_condition: self.close_condition,
@@ -1401,10 +1397,7 @@ fn process_menu_events<Message: std::clone::Clone>(
     overlay_offset: Vector,
 ) {
     let my_state = &mut menu.tree;
-    let menu_roots = match &mut menu.menu_roots {
-        Cow::Borrowed(_) => panic!(),
-        Cow::Owned(o) => o.as_mut_slice(),
-    };
+    let menu_roots = &mut menu.menu_roots;
     my_state.inner.with_data_mut(|state| {
         if state.active_root.len() <= menu.depth {
             return;

@@ -1013,7 +1013,7 @@ where
 
             let mut popup_menu: menu::Menu<'static, _> = menu::Menu {
                 tree: my_state.clone(),
-                menu_roots: std::borrow::Cow::Owned(vec![menu]),
+                menu_roots: vec![menu],
                 bounds_expand: 0,
                 menu_overlays_parent: false,
                 close_condition: CloseCondition {
@@ -2643,7 +2643,7 @@ where
         Some(
             crate::widget::menu::Menu {
                 tree: menu_state,
-                menu_roots: std::borrow::Cow::Owned(vec![menu]),
+                menu_roots: vec![menu],
                 bounds_expand: 16,
                 menu_overlays_parent: true,
                 close_condition: CloseCondition {
