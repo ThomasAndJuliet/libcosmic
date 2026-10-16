@@ -68,6 +68,9 @@ pub enum Action {
     WindowMaximized(iced::window::Id, bool),
     /// Updates the tracked window geometry.
     WindowResize(iced::window::Id, f32, f32),
+    /// The compositor's scale factor for a window, when it opens and when
+    /// it changes.
+    WindowRescaled(iced::window::Id, f32),
     /// Tracks updates to window state.
     #[cfg(wayland_platform)]
     WindowState(iced::window::Id, WindowState),

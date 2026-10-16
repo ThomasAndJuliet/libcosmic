@@ -78,6 +78,10 @@ pub struct Core {
     /// Scaling factor used by the application
     scale_factor: f32,
 
+    /// Each window's scale factor from the compositor (or the platform),
+    /// as last reported for it
+    window_scale_factors: HashMap<window::Id, f32>,
+
     /// Window focus state
     pub(super) focused_window: Vec<window::Id>,
 
@@ -144,6 +148,7 @@ impl Default for Core {
                 toggled_condensed: false,
             },
             scale_factor: 1.0,
+            window_scale_factors: HashMap::new(),
             title: HashMap::new(),
             theme_sub_counter: 0,
             system_theme: crate::theme::active(),
@@ -207,6 +212,31 @@ impl Core {
     #[inline]
     pub const fn scale_factor(&self) -> f32 {
         self.scale_factor
+    }
+
+    /// The effective scale factor of window `id`: the compositor's for that
+    /// window times the application's ([`Self::scale_factor`]); a logical
+    /// pixel of the window's content is this many physical pixels.
+    ///
+    /// The compositor's part is learnt when the window opens and whenever it
+    /// is rescaled; until then, and for a window libcosmic does not know, it
+    /// counts as 1.
+    #[must_use]
+    #[inline]
+    pub fn scale_factor_of(&self, id: window::Id) -> f32 {
+        self.window_scale_factors.get(&id).copied().unwrap_or(1.0) * self.scale_factor
+    }
+
+    /// Records the compositor's scale factor for window `id`.
+    #[inline]
+    pub(crate) fn set_window_scale_factor(&mut self, id: window::Id, factor: f32) {
+        self.window_scale_factors.insert(id, factor);
+    }
+
+    /// Forgets a closed window's scale factor.
+    #[inline]
+    pub(crate) fn forget_window_scale_factor(&mut self, id: window::Id) {
+        self.window_scale_factors.remove(&id);
     }
 
     /// Enable or disable keyboard navigation

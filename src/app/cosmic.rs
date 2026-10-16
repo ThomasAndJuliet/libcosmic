@@ -582,6 +582,9 @@ where
                 iced::Event::Window(window::Event::Opened { .. }) => {
                     return Some(Action::Opened(id));
                 }
+                iced::Event::Window(window::Event::Rescaled(factor)) => {
+                    return Some(Action::WindowRescaled(id, factor));
+                }
                 iced::Event::Window(window::Event::Closed) => {
                     return Some(Action::SurfaceClosed(id));
                 }
@@ -1070,6 +1073,10 @@ impl<T: Application> Cosmic<T> {
                 self.app.core_mut().set_scale_factor(factor);
             }
 
+            Action::WindowRescaled(id, factor) => {
+                self.app.core_mut().set_window_scale_factor(id, factor);
+            }
+
             Action::Close => {
                 return match self.app.on_app_exit() {
                     Some(message) => self.app.update(message),
@@ -1231,6 +1238,7 @@ impl<T: Application> Cosmic<T> {
                     self.surface_views.remove(&id);
                 }
                 self.surface_views.shrink_to(self.surface_views.len() * 2);
+                self.app.core_mut().forget_window_scale_factor(id);
 
                 let mut ret = if let Some(msg) = self.app.on_close_requested(id) {
                     self.app.update(msg)
@@ -1423,6 +1431,10 @@ impl<T: Application> Cosmic<T> {
                 core.applet.suggested_bounds = b;
             }
             Action::Opened(id) => {
+                // The window's scale as it opens: a `Rescaled` event may
+                // have come before the window was known, or not at all
+                let scale_task = iced::window::scale_factor(id)
+                    .map(move |factor| crate::Action::Cosmic(Action::WindowRescaled(id, factor)));
                 #[cfg(wayland_platform)]
                 {
                     use iced_winit::platform_specific::commands::corner_radius::corner_radius;
@@ -1495,9 +1507,13 @@ impl<T: Application> Cosmic<T> {
                         blur_cmd,
                         corner_task,
                         iced_runtime::window::run_with_handle(id, init_windowing_system),
+                        scale_task,
                     ]);
                 }
-                return iced_runtime::window::run_with_handle(id, init_windowing_system);
+                return Task::batch([
+                    iced_runtime::window::run_with_handle(id, init_windowing_system),
+                    scale_task,
+                ]);
             }
             #[cfg(wayland_platform)]
             Action::BlurEnabled => {
