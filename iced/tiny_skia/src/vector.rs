@@ -192,19 +192,18 @@ impl Cache {
                 return None;
             }
 
-            if let Some([r, g, b, _]) = key.color {
-                // Apply color filter
+            if let Some([r, g, b, a]) = key.color {
+                // Apply color filter, scaling coverage by the color's alpha
                 for pixel in
                     bytemuck::cast_slice_mut::<u8, u32>(image.data_mut())
                 {
+                    let alpha =
+                        (u16::from((*pixel >> 24) as u8) * u16::from(a) + 127)
+                            / 255;
+
                     *pixel = bytemuck::cast(
-                        tiny_skia::ColorU8::from_rgba(
-                            b,
-                            g,
-                            r,
-                            (*pixel >> 24) as u8,
-                        )
-                        .premultiply(),
+                        tiny_skia::ColorU8::from_rgba(b, g, r, alpha as u8)
+                            .premultiply(),
                     );
                 }
             } else {
@@ -241,5 +240,28 @@ impl std::fmt::Debug for Cache {
             .field("rasters", &self.rasters)
             .field("raster_hits", &self.raster_hits)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tint_applies_color_alpha() {
+        let handle = Handle::from_memory(
+            &br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/></svg>"#[..],
+        );
+        let mut cache = Cache::default();
+        let image = cache
+            .draw(
+                &handle,
+                Some(Color::from_rgba(1.0, 0.0, 0.0, 0.5)),
+                Size::new(4, 4),
+            )
+            .expect("rasterized");
+
+        // Premultiplied BGRA: half-transparent red
+        assert_eq!(&image.data()[..4], &[0, 0, 128, 128]);
     }
 }
