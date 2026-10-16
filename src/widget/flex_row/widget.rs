@@ -57,7 +57,7 @@ impl<'a, Message> FlexRow<'a, Message> {
         }
     }
 
-    /// Defines how content will be aligned horizontally.
+    /// Defines how content will be aligned vertically within each line.
     pub fn align_items(mut self, alignment: iced::Alignment) -> Self {
         self.align_items = Some(match alignment {
             iced::Alignment::Center => taffy::AlignItems::Center,
@@ -67,7 +67,8 @@ impl<'a, Message> FlexRow<'a, Message> {
         self
     }
 
-    /// Defines how content will be aligned vertically.
+    /// Has no effect: a flex layout ignores `justify_items`. Use
+    /// [`FlexRow::align_items`] to align content vertically.
     pub fn justify_items(mut self, alignment: iced::Alignment) -> Self {
         self.justify_items = Some(match alignment {
             iced::Alignment::Center => taffy::AlignItems::Center,
