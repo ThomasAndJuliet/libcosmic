@@ -69,15 +69,18 @@ impl Dispatch<ZwpTextInputV3, (), SctkState> for TextInputManager {
         _conn: &Connection,
         _qhandle: &QueueHandle<SctkState>,
     ) {
-        if cfg!(not(feature = "single-instance")) {
-            return;
-        }
-
         let kbd_focus =
             match state.seats.iter_mut().find_map(|s| s.kbd_focus.clone()) {
                 Some(surface) => surface,
                 None => return,
             };
+        // Only for the surfaces this event loop made (popups, layer, lock
+        // and subsurfaces). winit forwards input-method events for its own
+        // windows; forwarding them here too commits text twice on
+        // compositors that send to every text input of the seat (GNOME).
+        if !state.id_map.contains_key(&kbd_focus.id()) {
+            return;
+        }
         match event {
             TextInputEvent::PreeditString {
                 text,
