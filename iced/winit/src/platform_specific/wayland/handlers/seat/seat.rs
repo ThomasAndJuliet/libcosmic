@@ -171,6 +171,8 @@ impl SeatHandler for SctkState {
         match capability {
             // TODO use repeating kbd?
             cctk::sctk::seat::Capability::Keyboard => {
+                my_seat.kbd_focus = None;
+                my_seat.last_kbd_press = None;
                 if let Some(kbd) = my_seat.kbd.take() {
                     self.sctk_events.push(SctkEvent::SeatEvent {
                         variant: SeatEventVariant::RemoveCapability(

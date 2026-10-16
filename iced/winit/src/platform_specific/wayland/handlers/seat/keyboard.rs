@@ -363,7 +363,7 @@ impl KeyboardHandler for SctkState {
                     let id = self
                         .windows
                         .iter()
-                        .find(|w| w.wl_surface(&self.connection) == toplevel)
+                        .find(|w| w.wl_surface(&self.connection).as_ref() == Some(&toplevel))
                         .map(|w| w.id)
                         .or_else(|| {
                             self.layer_surfaces

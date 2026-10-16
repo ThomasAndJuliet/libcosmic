@@ -781,7 +781,7 @@ impl SctkEvent {
                             surface_id,
                             sctk_winit.clone(),
                         ))
-                        .expect("Send control message");
+                        .unwrap_or(());
                     if compositor.is_none() {
                         match create_compositor(
                             sctk_winit.clone(),
@@ -795,7 +795,7 @@ impl SctkEvent {
                                     .start_send(Control::Crash(
                                         Error::GraphicsCreationFailed(error),
                                     ))
-                                    .expect("Send control message");
+                                    .unwrap_or(());
                                 return;
                             }
                         };
@@ -1018,7 +1018,7 @@ impl SctkEvent {
                                 surface_id,
                                 sctk_winit.clone(),
                             ))
-                            .expect("Send control message");
+                            .unwrap_or(());
 
                         if clipboard.window_id().is_none() {
                             *clipboard = Clipboard::connect(
@@ -1142,7 +1142,7 @@ impl SctkEvent {
                                         w.raw.id(),
                                         winit::event::WindowEvent::RedrawRequested,
                                     )).await
-                                    .expect("Send control message");
+                                    .unwrap_or(());
                                 proxy.wake_up();
                             }
                             let physical = w.raw.surface_size();
@@ -1270,7 +1270,7 @@ impl SctkEvent {
                             surface_id,
                             sctk_winit.clone(),
                         ))
-                        .expect("Send control message");
+                        .unwrap_or(());
                     proxy.wake_up();
                 }
 
@@ -1296,7 +1296,7 @@ impl SctkEvent {
                                 .start_send(Control::Crash(
                                     Error::GraphicsCreationFailed(error),
                                 ))
-                                .expect("Send control message");
+                                .unwrap_or(());
                             return;
                         }
                     };
@@ -1615,7 +1615,7 @@ impl SctkEvent {
                             surface_id,
                             sctk_winit.clone(),
                         ))
-                        .expect("Send control message");
+                        .unwrap_or(());
 
                     if clipboard.window_id().is_none() {
                         *clipboard = Clipboard::connect(
@@ -1639,7 +1639,7 @@ impl SctkEvent {
                                     .start_send(Control::Crash(
                                         Error::GraphicsCreationFailed(error),
                                     ))
-                                    .expect("Send control message");
+                                    .unwrap_or(());
                                 return;
                             }
                         };

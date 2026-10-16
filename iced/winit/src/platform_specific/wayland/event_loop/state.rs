@@ -349,49 +349,34 @@ pub struct SctkWindow {
 }
 
 impl SctkWindow {
-    pub fn wl_surface(&self, conn: &Connection) -> WlSurface {
-        let window_handle = self.window.window_handle().unwrap();
-        let ptr = {
-            let raw_window_handle::RawWindowHandle::Wayland(h) =
-                window_handle.as_raw()
-            else {
-                panic!("Invalid window handle");
-            };
-            h.surface
+    // Native handles can be unavailable during teardown or on another backend.
+    // Borrow them for each operation instead of caching raw pointers.
+    pub fn wl_surface(&self, conn: &Connection) -> Option<WlSurface> {
+        let window_handle = self.window.window_handle().ok()?;
+        let raw_window_handle::RawWindowHandle::Wayland(handle) = window_handle.as_raw() else {
+            return None;
         };
         let id = unsafe {
-            ObjectId::from_ptr(WlSurface::interface(), ptr.as_ptr().cast())
-        }
-        .unwrap();
-        WlSurface::from_id(conn, id).unwrap()
+            ObjectId::from_ptr(WlSurface::interface(), handle.surface.as_ptr().cast())
+        }.ok()?;
+        WlSurface::from_id(conn, id).ok()
     }
 
-    pub fn xdg_surface(&self, conn: &Connection) -> XdgSurface {
-        let window_handle = self.window.xdg_surface_handle().unwrap();
-        let ptr = {
-            let h = window_handle
-                .xdg_surface_handle()
-                .expect("Invalid window handle");
-            h.as_raw()
-        };
+    pub fn xdg_surface(&self, conn: &Connection) -> Option<XdgSurface> {
+        let window_handle = self.window.xdg_surface_handle()?;
+        let handle = window_handle.xdg_surface_handle().ok()?;
         let id = unsafe {
-            ObjectId::from_ptr(XdgSurface::interface(), ptr.as_ptr().cast())
-        }
-        .unwrap();
-        XdgSurface::from_id(conn, id).unwrap()
+            ObjectId::from_ptr(XdgSurface::interface(), handle.as_raw().as_ptr().cast())
+        }.ok()?;
+        XdgSurface::from_id(conn, id).ok()
     }
 
-    pub fn xdg_toplevel(&self, conn: &Connection) -> XdgToplevel {
-        let window_handle = self.window.xdg_toplevel().unwrap();
-
+    pub fn xdg_toplevel(&self, conn: &Connection) -> Option<XdgToplevel> {
+        let window_handle = self.window.xdg_toplevel()?;
         let id = unsafe {
-            ObjectId::from_ptr(
-                XdgToplevel::interface(),
-                window_handle.as_ptr().cast(),
-            )
-        }
-        .unwrap();
-        XdgToplevel::from_id(conn, id).unwrap()
+            ObjectId::from_ptr(XdgToplevel::interface(), window_handle.as_ptr().cast())
+        }.ok()?;
+        XdgToplevel::from_id(conn, id).ok()
     }
 }
 
@@ -746,10 +731,9 @@ impl SctkState {
         } else if let Some(parent) =
             self.windows.iter().find(|w| w.id == settings.parent)
         {
-            (
-                PopupParent::Window(parent.wl_surface(&self.connection)),
-                parent.wl_surface(&self.connection),
-            )
+            let surface = parent.wl_surface(&self.connection)
+                .ok_or(PopupCreationError::ParentMissing)?;
+            (PopupParent::Window(surface.clone()), surface)
         } else if let Some(parent) = self.popmgr.popup_id(settings.parent) {
             (
                 PopupParent::Popup(parent.popup.wl_surface().clone()),
@@ -767,7 +751,7 @@ impl SctkState {
             } else if self
                 .windows
                 .iter()
-                .any(|w| w.wl_surface(&self.connection) == surface)
+                .any(|w| w.wl_surface(&self.connection).as_ref() == Some(&surface))
             {
                 (PopupParent::Window(surface.clone()), surface)
             } else if let Some(p) = self.popmgr.popup(&surface) {
@@ -856,15 +840,17 @@ impl SctkState {
                 let Some(parent_window) = self
                     .windows
                     .iter()
-                    .find(|w| &w.wl_surface(&self.connection) == parent)
+                    .find(|w| w.wl_surface(&self.connection).as_ref() == Some(parent))
                 else {
                     return Err(PopupCreationError::ParentMissing);
                 };
 
                 (
-                    &parent_window.wl_surface(&self.connection),
+                    &parent_window.wl_surface(&self.connection)
+                        .ok_or(PopupCreationError::ParentMissing)?,
                     Popup::from_surface(
-                        Some(&parent_window.xdg_surface(&self.connection)),
+                        Some(&parent_window.xdg_surface(&self.connection)
+                            .ok_or(PopupCreationError::ParentMissing)?),
                         &positioner,
                         &self.queue_handle,
                         wl_surface.clone(),
@@ -1347,7 +1333,7 @@ impl SctkState {
                         // if an existing popup with the same id exists, we just update the positioner.
                         if let Some((chain, existing)) = self.popmgr.popup_id(settings.id).and_then(|p|
                                 (p.data.grab == settings.grab && self.popmgr.popups().any(|parent| parent.popup.wl_surface() == p.data.parent.wl_surface() && parent.data.id == settings.parent)
-                                || self.windows.iter().any(|w| w.id == settings.parent && *p.data.parent.wl_surface() == w.wl_surface(&self.connection))
+                                || self.windows.iter().any(|w| w.id == settings.parent && w.wl_surface(&self.connection).as_ref() == Some(p.data.parent.wl_surface()))
                                 || self.layer_surfaces.iter().any(|l| l.id == settings.parent && p.data.parent.wl_surface() == l.surface.wl_surface())
                                 || (p.data.parent_window == settings.parent && self.subsurfaces.iter().any(|s| s.id == settings.parent))).then(||
                             {
@@ -1541,7 +1527,7 @@ impl SctkState {
                     if let Some(activation_state) = self.activation_state.as_ref() {
                         let (seat_and_serial, surface) = if let Some(id) = window {
                             let surface = self.windows.iter().find(|w| w.id == id)
-                                .map(|w| w.wl_surface(&self.connection).clone())
+                                .and_then(|w| w.wl_surface(&self.connection))
                                 .or_else(|| self.layer_surfaces.iter().find(|l| l.id == id)
                                     .map(|l| l.surface.wl_surface().clone())
                                 );
@@ -1579,7 +1565,7 @@ impl SctkState {
                 },
                 platform_specific::wayland::activation::Action::Activate { window, token } => {
                     if let Some(activation_state) = self.activation_state.as_ref() {
-                        if let Some(surface) = self.windows.iter().find(|w| w.id == window).map(|w| w.wl_surface(&self.connection)) {
+                        if let Some(surface) = self.windows.iter().find(|w| w.id == window).and_then(|w| w.wl_surface(&self.connection)) {
                             activation_state.activate::<SctkState>(&surface, token)
                         }
                     }
@@ -1748,7 +1734,8 @@ impl SctkState {
                         Wlr(ZwlrLayerSurfaceV1),
                     }
                     let s = if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
-                        Some((Surface::Xdg(w.xdg_surface(&self.connection), Some(w.xdg_toplevel(&self.connection))), w.window.surface_size().cast::<f64>().to_logical(w.window.scale_factor())))
+                        w.xdg_surface(&self.connection).zip(w.xdg_toplevel(&self.connection)).map(|(surface, toplevel)|
+                            (Surface::Xdg(surface, Some(toplevel)), w.window.surface_size().cast::<f64>().to_logical(w.window.scale_factor())))
                     } else if let Some(p) = self.popmgr.popup_id_mut(id) {
                         let guard = p.common.lock().unwrap();
                         Some((Surface::Xdg(p.popup.xdg_surface().clone(), None), guard.size.cast::<f64>()))
@@ -2077,7 +2064,8 @@ impl SctkState {
         } else if let Some(parent) =
             self.windows.iter().find(|w| w.id == settings.parent)
         {
-            PopupParent::Window(parent.wl_surface(&self.connection))
+            PopupParent::Window(parent.wl_surface(&self.connection)
+                .ok_or(SubsurfaceCreationError::ParentMissing)?)
         } else if let Some(parent) = self.popmgr.popup_id(settings.parent) {
             PopupParent::Popup(parent.popup.wl_surface().clone())
         } else if let Some(i) = self
@@ -2185,6 +2173,9 @@ impl SctkState {
                 .as_ref()
                 .is_some_and(|s| s == parent_wl_surface)
             {
+                let Some(kbd) = focus.kbd.clone() else {
+                    continue;
+                };
                 let id = winit::window::WindowId::from_raw(
                     wl_surface.id().as_ptr() as usize,
                 );
@@ -2194,7 +2185,7 @@ impl SctkState {
                 ));
                 self.sctk_events.push(SctkEvent::KeyboardEvent {
                     variant: KeyboardEventVariant::Enter(wl_surface.clone()),
-                    kbd_id: focus.kbd.clone().unwrap(),
+                    kbd_id: kbd,
                     seat_id: focus.seat.clone(),
                     surface: wl_surface.clone(),
                 });

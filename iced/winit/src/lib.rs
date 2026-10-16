@@ -329,29 +329,15 @@ where
                 return;
             };
 
-            let finish_boot = async move {
-                sender.send(()).ok().expect("Send boot event");
-                Ok::<_, graphics::Error>(())
-            };
-
-            #[cfg(not(target_arch = "wasm32"))]
-            if let Err(error) =
-                crate::futures::futures::executor::block_on(finish_boot)
-            {
-                *self.error.lock().unwrap() = Some(Error::GraphicsCreationFailed(error));
+            // The instance may have been cancelled during native startup.
+            if sender.send(()).is_err() {
                 event_loop.exit();
+                return;
             }
 
             #[cfg(target_arch = "wasm32")]
             {
-                let is_booted = self.is_booted.clone();
-
-                wasm_bindgen_futures::spawn_local(async move {
-                    finish_boot.await.expect("Finish boot!");
-
-                    *is_booted.borrow_mut() = true;
-                });
-
+                *self.is_booted.borrow_mut() = true;
                 event_loop
                     .set_control_flow(winit::event_loop::ControlFlow::Poll);
             }
@@ -372,7 +358,10 @@ where
             }
 
             if let Some(event) = event {
-                self.sender.start_send(event).expect("Send event");
+                if self.sender.start_send(event).is_err() {
+                    event_loop.exit();
+                    return;
+                }
             }
             loop {
                 let poll = self.instance.as_mut().poll(&mut self.context);
@@ -555,7 +544,7 @@ where
                                 }
                             }
                             Control::Dnd(e) => {
-                                self.sender.start_send(Event::Dnd(e)).unwrap();
+                                self.sender.start_send(Event::Dnd(e)).unwrap_or(());
                             }
                             #[cfg(feature = "a11y")]
                             Control::Accessibility(id, event) => {
@@ -574,12 +563,12 @@ where
                             Control::PlatformSpecific(e) => {
                                 self.sender
                                     .start_send(Event::PlatformSpecific(e))
-                                    .unwrap();
+                                    .unwrap_or(());
                             }
                             Control::AboutToWait => {
                                 self.sender
                                     .start_send(Event::AboutToWait)
-                                    .expect("Send event");
+                                    .unwrap_or(());
                             }
                             Control::Winit(id, e) => {
                                 #[cfg(wayland_platform)]
@@ -609,12 +598,12 @@ where
 
                                 self.sender
                                     .start_send(Event::Winit(id, e))
-                                    .expect("Send event");
+                                    .unwrap_or(());
                             }
                             Control::StartDnd => {
                                 self.sender
                                     .start_send(Event::StartDnd)
-                                    .expect("Send event");
+                                    .unwrap_or(());
                             }
                             #[cfg(feature = "a11y")]
                             Control::InitAdapter(id, window) => {
@@ -777,7 +766,9 @@ async fn run_instance<P>(
     use winit::event;
     use winit::event_loop::ControlFlow;
 
-    _ = boot.await.expect("Receive boot");
+    if boot.await.is_err() {
+        return;
+    }
 
     let mut platform_specific_handler =
         crate::platform_specific::PlatformSpecific::default();
@@ -928,7 +919,7 @@ async fn run_instance<P>(
                                 .start_send(Control::Crash(
                                     Error::GraphicsCreationFailed(error),
                                 ))
-                                .expect("Send control message");
+                                .unwrap_or(());
                             continue;
                         }
                     }
@@ -1082,7 +1073,7 @@ async fn run_instance<P>(
                             window.raw.id(),
                             WindowEvent::RedrawRequested,
                         ))
-                        .expect("Send redraw event");
+                        .unwrap_or(());
                     continue;
                 }
                 // XX must force update to corner radius before the surface is committed.
@@ -1100,7 +1091,7 @@ async fn run_instance<P>(
                             window.raw.id(),
                             WindowEvent::RedrawRequested,
                         ))
-                        .expect("Send redraw event");
+                        .unwrap_or(());
                 }
                 window.redraw_requested = false;
 
@@ -1381,7 +1372,7 @@ async fn run_instance<P>(
                     runtime.track(None.into_iter());
                     control_sender
                         .start_send(Control::Exit)
-                        .expect("Send control action");
+                        .unwrap_or(());
 
                     continue;
                 }
@@ -2043,10 +2034,8 @@ where
                 }
             }
 
-            compositor_sender
-                .send(compositor)
-                .ok()
-                .expect("Send compositor");
+            // A cancelled window no longer needs its compositor.
+            let _ = compositor_sender.send(compositor);
 
             // HACK! Send a proxy event on completion to trigger
             // a runtime re-poll
@@ -2067,7 +2056,9 @@ where
     #[cfg(not(target_arch = "wasm32"))]
     runtime.block_on(create_compositor);
 
-    compositor_receiver.await.expect("Wait for compositor")
+    compositor_receiver.await.map_err(|_| {
+        iced_graphics::Error::BackendError("compositor initialization was cancelled".into())
+    })?
 }
 
 /// Builds a window's [`UserInterface`] for the [`Program`].
@@ -2215,7 +2206,7 @@ where
                         monitor,
                         on_open: channel,
                     })
-                    .expect("Send control action");
+                    .unwrap_or(());
 
                 *is_window_opening = true;
             }
@@ -2523,7 +2514,7 @@ where
             window::Action::SetAllowAutomaticTabbing(enabled) => {
                 control_sender
                     .start_send(Control::SetAutomaticWindowTabbing(enabled))
-                    .expect("Send control action");
+                    .unwrap_or(());
             }
             window::Action::RedrawAll => {
                 for (_id, window) in window_manager.iter_mut() {
@@ -2681,7 +2672,7 @@ where
         Action::Exit => {
             control_sender
                 .start_send(Control::Exit)
-                .expect("Send control action");
+                .unwrap_or(());
             return true;
         }
         Action::Dnd(a) => match a {
