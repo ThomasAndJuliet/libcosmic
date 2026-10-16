@@ -163,6 +163,18 @@ where
                     shell.capture_event();
                     return;
                 }
+                // Household: nor does a key pressed, or text composed, reach
+                // the content behind (a focused terminal or text field). The
+                // event stays uncaptured, so the application still sees it;
+                // releases and modifier changes still pass, so the content's
+                // modifier state stays right.
+                if matches!(
+                    event,
+                    Event::Keyboard(iced_core::keyboard::Event::KeyPressed { .. })
+                        | Event::InputMethod(_)
+                ) {
+                    return;
+                }
             } else if let Some(on_close) = self.on_close.as_ref() {
                 if matches!(
                     event,
