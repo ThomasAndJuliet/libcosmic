@@ -517,6 +517,8 @@ where
     }
 
     fn diff(&mut self, tree: &mut Tree) {
+        // The bar's own roots are laid out, drawn and updated from `tree.children`
+        menu_roots_diff(&mut self.menu_roots, tree);
         let state = tree.state.downcast_mut::<MenuBarState>();
         state
             .inner
@@ -852,5 +854,98 @@ fn process_root_events<Message>(
             shell,
             viewport,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced::advanced::renderer::Headless;
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    #[derive(Clone, Debug)]
+    enum Message {
+        Item,
+    }
+
+    fn renderer() -> Renderer {
+        iced::futures::executor::block_on(<Renderer as Headless>::new(
+            iced::Font::default(),
+            iced::Pixels(14.0),
+            Some("tiny-skia"),
+        ))
+        .expect("a headless renderer")
+    }
+
+    fn item() -> MenuTree<Message> {
+        MenuTree::from(crate::Element::from(
+            crate::widget::button::text("Item").on_press(Message::Item),
+        ))
+    }
+
+    /// File, Edit, View as text roots, as a wide window shows them
+    fn wide() -> crate::Element<'static, Message> {
+        let roots = ["File", "Edit", "View"]
+            .into_iter()
+            .map(|title| {
+                MenuTree::with_children(
+                    crate::widget::RcElementWrapper::new(crate::Element::from(super::super::root(
+                        title,
+                    ))),
+                    vec![item(), item()],
+                )
+            })
+            .collect();
+        menu_bar(roots).into()
+    }
+
+    /// The same menus folded into one icon button with a tooltip, as Cerea
+    /// shows them in a narrow window
+    fn folded() -> crate::Element<'static, Message> {
+        let button =
+            crate::widget::button::icon(crate::widget::icon::from_name("open-menu-symbolic"))
+                .class(crate::theme::Button::MenuRoot);
+        let root = crate::widget::tooltip(
+            button,
+            crate::widget::text("Menu"),
+            crate::widget::tooltip::Position::Bottom,
+        );
+        let menus = ["File", "Edit", "View"]
+            .into_iter()
+            .map(|title| {
+                MenuTree::with_children(
+                    crate::widget::RcElementWrapper::new(crate::Element::from(
+                        crate::widget::text(title),
+                    )),
+                    vec![item()],
+                )
+            })
+            .collect::<Vec<_>>();
+        menu_bar(vec![MenuTree::with_children(
+            crate::widget::RcElementWrapper::new(crate::Element::from(root)),
+            menus,
+        )])
+        .into()
+    }
+
+    #[test]
+    fn roots_that_change_kind_are_laid_out_with_their_own_state() {
+        let mut renderer = renderer();
+        let size = iced::Size::new(600.0, 40.0);
+        let mut cache = Cache::default();
+        // Wide, folded, wide again: each view lays out against the last one's tree
+        for view in [wide, folded, wide, folded] {
+            let mut ui = UserInterface::build(view(), size, cache, &mut renderer);
+            _ = ui.update(
+                &[iced::Event::Mouse(mouse::Event::CursorMoved {
+                    position: Point::new(10.0, 10.0),
+                })],
+                Cursor::Available(Point::new(10.0, 10.0)),
+                &mut renderer,
+                &mut iced_core::clipboard::Null,
+                &mut Vec::new(),
+            );
+            cache = ui.into_cache();
+        }
     }
 }
