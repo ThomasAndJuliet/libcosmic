@@ -968,10 +968,10 @@ impl<T: Application> Cosmic<T> {
                 let new_blur = self.blur_enabled && self.app.core().frosted(theme.cosmic());
                 theme.transparent = new_blur;
 
-                let cmd = self.app.system_theme_update(&keys, theme.cosmic());
                 // Record the last-known system theme in event that the current theme is custom.
                 self.app.core_mut().system_theme = theme.clone();
                 let portal_accent = self.app.core().portal_accent;
+                let mut tasks = Vec::new();
                 {
                     let mut cosmic_theme = THEME.lock().unwrap();
 
@@ -1055,12 +1055,15 @@ impl<T: Application> Cosmic<T> {
                                     cmds.push(iced::window::disable_blur(*id));
                                 }
                             }
-                            return Task::batch(cmds);
+                            tasks = cmds;
                         }
                     }
                 }
 
-                return cmd;
+                // The app hears of the change once the core and the global theme have it
+                let theme = self.app.core().system_theme.clone();
+                tasks.push(self.app.system_theme_update(&keys, theme.cosmic()));
+                return Task::batch(tasks);
             }
 
             Action::ScaleFactor(factor) => {
@@ -1084,7 +1087,7 @@ impl<T: Application> Cosmic<T> {
                     return iced::Task::none();
                 }
 
-                let mut cmds = vec![self.app.system_theme_mode_update(&keys, &mode)];
+                let mut cmds = Vec::new();
 
                 let core = self.app.core_mut();
                 core.system_theme_mode = mode;
@@ -1099,7 +1102,6 @@ impl<T: Application> Cosmic<T> {
                     } else {
                         crate::theme::system_light()
                     };
-                    cmds.push(self.app.system_theme_update(&[], new_theme.cosmic()));
 
                     let core = self.app.core_mut();
                     new_theme = if let Some(a) = core.portal_accent {
@@ -1137,8 +1139,7 @@ impl<T: Application> Cosmic<T> {
                                     .core()
                                     .main_window_id()
                                     .unwrap_or(window::Id::RESERVED);
-                                let mut cmds =
-                                    vec![corner_radius(main_window_id, cur_rad).discard()];
+                                cmds.push(corner_radius(main_window_id, cur_rad).discard());
                                 // Update radius for each tracked view with the window surface type
                                 for (id, (_, surface_type, live_settings, _)) in &self.surface_views
                                 {
@@ -1184,11 +1185,15 @@ impl<T: Application> Cosmic<T> {
                                         cmds.push(iced::window::disable_blur(*id));
                                     }
                                 }
-
-                                return Task::batch(cmds);
                             }
                         }
                     }
+                }
+                // The app hears of the change once the core and the global theme have it
+                cmds.push(self.app.system_theme_mode_update(&keys, &mode));
+                if changed {
+                    let theme = self.app.core().system_theme.clone();
+                    cmds.push(self.app.system_theme_update(&[], theme.cosmic()));
                 }
                 return Task::batch(cmds);
             }
