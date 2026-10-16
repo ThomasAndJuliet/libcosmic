@@ -66,6 +66,34 @@ Each commit says where it came from, using an `Origin:` line or a household-ui p
   - `initial_position` and `Viewport::position`. **Note:** an id set with `.id()` is no longer replaced by `set_id`, for every scrollable.
 - **iced tiny_skia:** the clip mask is set for each raw text run, fill and stroke, and is only refilled when its bounds change.
 
+### Round 1 (16 October 2026)
+
+Each commit carries the number of the household-ui proposal it answers, or an `Inventory:` line.
+
+- **SVG:** a tint's alpha is applied in both renderers.
+- **settings:**
+  - flex rows centre their items vertically (`align_items`, not the ignored `justify_items`) (#8);
+  - opt-in `settings::control_lines(row, n)`, plus `Item::control_lines` and `Item::flex_control_lines`, centre the control on the first `n` lines of text (#8).
+- **toggler:** opt-in `theme::Toggler` class, with `accent(colour)` and `custom(style)` variants. The default look is unchanged (#10).
+- **button:**
+  - `align_x` and `align_y` place a button's content;
+  - text and icon buttons centre their content, and honour a `Fill` width (#7).
+- **menus:**
+  - the menu bar diffs its roots' own trees, which fixes a panic when the roots change kind (#24);
+  - the press that closes a menu is swallowed, for both in-window and native popups (#17).
+- **cosmic-theme:**
+  - a partially saved theme is filled from its own mode's defaults;
+  - a never-saved light theme gives the built-in light theme;
+  - `with_accent` rebuilds the theme it is called on, without reading from disk.
+- **app:**
+  - the core starts with the saved desktop theme;
+  - system theme hooks run after the theme has changed, and their tasks are no longer dropped on Wayland;
+  - an optional single-instance bus name, `Settings::single_instance_name` (#27).
+- **core:**
+  - public scale, size and exit-on-main-window-closed setters (#30);
+  - `Core::scale_factor_of(window::Id)` (#35).
+- **iced_winit:** SCTK input-method events are forwarded according to the surface, not the `single-instance` feature (#29).
+
 ## Rebasing onto upstream
 
 1. Fetch upstream libcosmic, and rebase `household` onto the new upstream commit, dropping the subtree commits.
