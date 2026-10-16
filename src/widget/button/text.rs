@@ -130,11 +130,15 @@ impl<'a, Message: Clone + 'static> From<Button<'a, Message>> for Element<'a, Mes
             // Optional icon to place behind the label.
             .push_maybe(trailing_icon)
             .padding(builder.padding)
-            .width(builder.width)
-            .height(builder.height)
             .spacing(builder.spacing)
             .align_y(Alignment::Center)
             .apply(super::custom)
+            // The button takes the size, so a fixed or Fill width is honoured,
+            // and its label and icons sit in the middle of it.
+            .width(builder.width)
+            .height(builder.height)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
             .padding(0)
             .id(builder.id)
             .on_press_maybe(builder.on_press.take())
@@ -164,5 +168,103 @@ impl<'a, Message: Clone + 'static> From<Button<'a, Message>> for Element<'a, Mes
             )
             .into()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Element;
+    use iced_core::layout::{Limits, Node};
+    use iced_core::widget::Tree;
+    use iced_core::{Length, Rectangle, Size};
+
+    fn laid_out(mut element: Element<'static, ()>, max: Size) -> Node {
+        let renderer = iced::futures::executor::block_on(
+            <crate::Renderer as iced_core::renderer::Headless>::new(
+                crate::font::default(),
+                iced_core::Pixels(14.0),
+                Some("tiny-skia"),
+            ),
+        )
+        .expect("a headless renderer");
+        let mut tree = Tree::new(&element);
+        element
+            .as_widget_mut()
+            .layout(&mut tree, &renderer, &Limits::new(Size::ZERO, max))
+    }
+
+    /// The union of the leaves under `node`'s content, in `node`'s frame.
+    fn content(node: &Node) -> Rectangle {
+        fn walk(node: &Node, at: iced_core::Vector, out: &mut Option<Rectangle>) {
+            let bounds = node.bounds() + at;
+            if node.children().is_empty() {
+                *out = Some(out.map_or(bounds, |r| r.union(&bounds)));
+            }
+            for child in node.children() {
+                walk(child, iced_core::Vector::new(bounds.x, bounds.y), out);
+            }
+        }
+        let mut out = None;
+        for child in node.children() {
+            walk(child, iced_core::Vector::ZERO, &mut out);
+        }
+        out.expect("content")
+    }
+
+    #[test]
+    fn text_buttons_centre_their_content() {
+        let icon = || crate::widget::icon::from_name("list-add-symbolic");
+        let cases: Vec<(&str, Element<'static, ()>, Option<f32>)> = vec![
+            ("shrink", super::standard("Send").into(), None),
+            (
+                "fixed",
+                super::suggested("Send").width(200.0).into(),
+                Some(200.0),
+            ),
+            (
+                "fill",
+                super::text("Steer").width(Length::Fill).into(),
+                Some(300.0),
+            ),
+            (
+                "fixed with icon",
+                super::standard("Add")
+                    .leading_icon(icon())
+                    .width(160.0)
+                    .into(),
+                Some(160.0),
+            ),
+            (
+                "icon button",
+                crate::widget::button::icon(icon())
+                    .label("Add")
+                    .width(Length::Fill)
+                    .into(),
+                Some(300.0),
+            ),
+        ];
+        for (name, element, width) in cases {
+            let node = laid_out(element, Size::new(300.0, 200.0));
+            let button = Rectangle::new(iced_core::Point::ORIGIN, node.size());
+            if let Some(width) = width {
+                assert_eq!(button.width, width, "{name}: button width");
+            }
+            let label = content(&node);
+            if width.is_none() {
+                // As wide as it needs: the size it always had
+                assert_eq!(button.width - label.width, 32.0, "{name}: side padding");
+                assert_eq!(button.height, 32.0, "{name}: height");
+            }
+            assert!(
+                (label.center_x() - button.center_x()).abs() <= 0.5
+                    && (label.center_y() - button.center_y()).abs() <= 0.5,
+                "{name}: content {label:?} not centred in {button:?}"
+            );
+        }
+
+        // A custom button keeps its content at the start unless asked
+        let custom = crate::widget::button::custom(crate::widget::text("Row")).width(200.0);
+        let node = laid_out(custom.into(), Size::new(300.0, 200.0));
+        assert_eq!(content(&node).position(), iced_core::Point::new(5.0, 5.0));
     }
 }

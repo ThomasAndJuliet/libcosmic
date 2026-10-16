@@ -165,11 +165,14 @@ impl<'a, Message: Clone + 'static> From<Button<'a, Message>> for Element<'a, Mes
         } else {
             crate::widget::row::with_children(content)
                 .padding(builder.padding)
-                .width(builder.width)
-                .height(builder.height)
                 .spacing(builder.spacing)
                 .align_y(Alignment::Center)
                 .apply(super::custom)
+                // As text buttons: the button takes the size, content centred.
+                .width(builder.width)
+                .height(builder.height)
+                .align_x(Alignment::Center)
+                .align_y(Alignment::Center)
         };
 
         #[cfg(feature = "a11y")]
