@@ -34,6 +34,7 @@ pub struct Toggler<'a, Message> {
     font: Option<crate::font::Font>,
     duration: Duration,
     ellipsize: text::Ellipsize,
+    class: crate::theme::Toggler<'a>,
 }
 
 impl<'a, Message> Toggler<'a, Message> {
@@ -64,6 +65,7 @@ impl<'a, Message> Toggler<'a, Message> {
             font: None,
             duration: Duration::from_millis(200),
             ellipsize: text::Ellipsize::None,
+            class: crate::theme::Toggler::default(),
         }
     }
 
@@ -140,6 +142,13 @@ impl<'a, Message> Toggler<'a, Message> {
 
     pub fn on_toggle_maybe(mut self, on_toggle: Option<impl Fn(bool) -> Message + 'a>) -> Self {
         self.on_toggle = on_toggle.map(|t| Box::new(t) as _);
+        self
+    }
+
+    /// Sets the style class of the [`Toggler`], such as
+    /// [`crate::theme::Toggler::accent`] for another colour when it is on.
+    pub fn class(mut self, class: impl Into<crate::theme::Toggler<'a>>) -> Self {
+        self.class = class.into();
         self
     }
 
@@ -349,7 +358,7 @@ impl<'a, Message> Widget<Message, crate::Theme, crate::Renderer> for Toggler<'a,
         // );
 
         let style = theme.style(
-            &(),
+            &self.class,
             if self.on_toggle.is_none() {
                 Status::Disabled {
                     is_toggled: self.is_toggled,

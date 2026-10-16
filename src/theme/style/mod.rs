@@ -21,6 +21,8 @@ pub use self::iced::Rule;
 pub use self::iced::Svg;
 #[doc(inline)]
 pub use self::iced::Text;
+#[doc(inline)]
+pub use self::iced::Toggler;
 
 pub mod menu_bar;
 

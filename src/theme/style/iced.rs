@@ -919,13 +919,53 @@ impl radio::Catalog for Theme {
 /*
  * Toggler
  */
-impl toggler::Catalog for Theme {
-    type Class<'a> = ();
+/// Styles for the toggler widget.
+#[derive(Default)]
+pub enum Toggler<'a> {
+    /// The theme's accent fills the toggler when it is on.
+    #[default]
+    Default,
+    /// The default look, with the colour `f` gives filling the toggler when
+    /// it is on; hover and disabled are derived from it as from the accent.
+    Accent(Box<dyn Fn(&Theme) -> Color + 'a>),
+    /// A look of the app's own for each status.
+    Custom(Box<dyn Fn(&Theme, toggler::Status) -> toggler::Style + 'a>),
+}
 
-    fn default<'a>() -> Self::Class<'a> {}
+impl<'a> Toggler<'a> {
+    /// The default look, filled with `f`'s colour when on.
+    pub fn accent<F: Fn(&Theme) -> Color + 'a>(f: F) -> Self {
+        Self::Accent(Box::new(f))
+    }
+
+    pub fn custom<F: Fn(&Theme, toggler::Status) -> toggler::Style + 'a>(f: F) -> Self {
+        Self::Custom(Box::new(f))
+    }
+}
+
+impl<'a> From<toggler::StyleFn<'a, Theme>> for Toggler<'a> {
+    fn from(f: toggler::StyleFn<'a, Theme>) -> Self {
+        Self::Custom(f)
+    }
+}
+
+impl toggler::Catalog for Theme {
+    type Class<'a> = Toggler<'a>;
+
+    fn default<'a>() -> Self::Class<'a> {
+        Toggler::default()
+    }
 
     fn style(&self, class: &Self::Class<'_>, status: toggler::Status) -> toggler::Style {
         let cosmic = self.cosmic();
+        let accent = match class {
+            Toggler::Default => cosmic.accent_color(),
+            Toggler::Accent(f) => {
+                let c = f(self);
+                palette::Srgba::new(c.r, c.g, c.b, c.a)
+            }
+            Toggler::Custom(f) => return f(self, status),
+        };
         const HANDLE_MARGIN: f32 = 2.0;
         let neutral_10 = cosmic.palette.neutral_10.with_alpha(0.1);
 
@@ -935,7 +975,7 @@ impl toggler::Catalog for Theme {
                 toggler::Status::Active { is_toggled: true }
                     | toggler::Status::Disabled { is_toggled: true }
             ) {
-                cosmic.accent.base.into()
+                accent.into()
             } else if cosmic.is_dark {
                 cosmic.palette.neutral_6.into()
             } else {
@@ -961,7 +1001,7 @@ impl toggler::Catalog for Theme {
                 let is_active = matches!(status, toggler::Status::Hovered { is_toggled: true });
                 toggler::Style {
                     background: if is_active {
-                        over(neutral_10, cosmic.accent_color())
+                        over(neutral_10, accent)
                     } else {
                         over(
                             neutral_10,
@@ -1671,6 +1711,77 @@ impl Base for Theme {
             crate::theme::ThemeType::HighContrastLight => "Cosmic High Contrast Light Theme",
             crate::theme::ThemeType::Custom(theme) => "Custom Cosmic Theme",
             crate::theme::ThemeType::System { prefer_dark, theme } => &theme.name,
+        }
+    }
+}
+
+#[cfg(test)]
+mod toggler_tests {
+    use super::{Theme, Toggler, over, toggler};
+    use iced::{Background, Color};
+    use palette::WithAlpha;
+    use toggler::{Catalog, Status};
+
+    const STATUSES: [Status; 6] = [
+        Status::Active { is_toggled: true },
+        Status::Active { is_toggled: false },
+        Status::Hovered { is_toggled: true },
+        Status::Hovered { is_toggled: false },
+        Status::Disabled { is_toggled: true },
+        Status::Disabled { is_toggled: false },
+    ];
+
+    #[test]
+    fn accent_class_is_the_default_look_with_its_colour_for_on() {
+        for theme in [Theme::dark(), Theme::light()] {
+            let cosmic = theme.cosmic();
+            // The default look fills "on" with the theme's accent, as before.
+            let on = theme.style(&Toggler::Default, Status::Active { is_toggled: true });
+            assert_eq!(on.background, Background::Color(cosmic.accent.base.into()));
+            // The accent class given the theme's accent is the default look.
+            let same = Toggler::accent(|t: &Theme| t.cosmic().accent_color().into());
+            for status in STATUSES {
+                assert_eq!(
+                    theme.style(&same, status),
+                    theme.style(&Toggler::Default, status)
+                );
+            }
+
+            let red = Color::from_rgb(1.0, 0.0, 0.0);
+            let class = Toggler::accent(move |_| red);
+            let on = theme.style(&class, Status::Active { is_toggled: true });
+            assert_eq!(on.background, Background::Color(red));
+            let hovered = theme.style(&class, Status::Hovered { is_toggled: true });
+            let neutral_10 = cosmic.palette.neutral_10.with_alpha(0.1);
+            let red_srgba = palette::Srgba::new(1.0, 0.0, 0.0, 1.0);
+            assert_eq!(
+                hovered.background,
+                Background::Color(over(neutral_10, red_srgba).into())
+            );
+            let disabled = theme.style(&class, Status::Disabled { is_toggled: true });
+            assert_eq!(disabled.background, Background::Color(red).scale_alpha(0.5));
+            // Off is untouched.
+            for status in [
+                Status::Active { is_toggled: false },
+                Status::Hovered { is_toggled: false },
+                Status::Disabled { is_toggled: false },
+            ] {
+                assert_eq!(
+                    theme.style(&class, status),
+                    theme.style(&Toggler::Default, status)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn custom_class_gives_its_own_style() {
+        let theme = Theme::dark();
+        let mut wanted = theme.style(&Toggler::Default, Status::Active { is_toggled: true });
+        wanted.foreground = Background::Color(Color::BLACK);
+        let class = Toggler::custom(move |_, _| wanted);
+        for status in STATUSES {
+            assert_eq!(theme.style(&class, status), wanted);
         }
     }
 }
