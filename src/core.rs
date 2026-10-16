@@ -223,8 +223,12 @@ impl Core {
     }
 
     /// Changes the scaling factor used by the application.
+    ///
+    /// libcosmic sets this itself from `Settings::scale_factor` and
+    /// `command::set_scaling_factor`; an app that makes a `Core` of its own
+    /// (for a window of a multi-window program) sets it here.
     #[cold]
-    pub(crate) fn set_scale_factor(&mut self, factor: f32) {
+    pub fn set_scale_factor(&mut self, factor: f32) {
         self.scale_factor = factor;
         self.is_condensed_update();
     }
@@ -293,6 +297,22 @@ impl Core {
         }
     }
 
+    /// Whether closing the main window exits the program.
+    #[must_use]
+    #[inline]
+    pub const fn exit_on_main_window_closed(&self) -> bool {
+        self.exit_on_main_window_closed
+    }
+
+    /// Sets whether closing the main window exits the program. It is set
+    /// from `Settings::exit_on_close` at start-up; a program
+    /// that hosts several windows, each with its own `Core`, turns it off
+    /// and decides itself when to exit.
+    #[inline]
+    pub const fn set_exit_on_main_window_closed(&mut self, exit: bool) {
+        self.exit_on_main_window_closed = exit;
+    }
+
     #[inline]
     pub fn main_window_is(&self, id: iced::window::Id) -> bool {
         self.main_window_id().is_some_and(|main_id| main_id == id)
@@ -359,13 +379,17 @@ impl Core {
 
     #[inline]
     /// Set the height of the main window.
-    pub(crate) const fn set_window_height(&mut self, new_height: f32) {
+    ///
+    /// libcosmic tracks this from the main window's resize events; an app
+    /// that makes a `Core` of its own can give it a size before the first.
+    pub const fn set_window_height(&mut self, new_height: f32) {
         self.window.height = new_height;
     }
 
     #[inline]
-    /// Set the width of the main window.
-    pub(crate) fn set_window_width(&mut self, new_width: f32) {
+    /// Set the width of the main window, which decides whether the view is
+    /// condensed.
+    pub fn set_window_width(&mut self, new_width: f32) {
         self.window.width = new_width;
         self.is_condensed_update();
     }
