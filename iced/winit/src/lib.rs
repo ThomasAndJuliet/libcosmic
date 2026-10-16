@@ -91,7 +91,7 @@ where
     let settings = program.settings();
     let window_settings = program.window();
 
-    let event_loop = EventLoop::new().expect("Create event loop");
+    let event_loop = EventLoop::new().map_err(Error::EventLoop)?;
 
     #[cfg(wayland_platform)]
     let is_wayland =
@@ -185,7 +185,7 @@ where
         boot: Option<BootConfig>,
         sender: mpsc::UnboundedSender<Event<Message>>,
         receiver: mpsc::UnboundedReceiver<Control>,
-        error: Option<Error>,
+        error: Arc<std::sync::Mutex<Option<Error>>>,
         system_theme: Option<oneshot::Sender<theme::Mode>>,
         control_sender: mpsc::UnboundedSender<Control>,
 
@@ -201,6 +201,7 @@ where
         canvas: Option<web_sys::HtmlCanvasElement>,
     }
 
+    let run_error = Arc::new(std::sync::Mutex::new(None));
     let runner = Runner {
         instance,
         context,
@@ -214,7 +215,7 @@ where
         sender: event_sender,
         receiver: control_receiver,
         control_sender: control_sender.clone(),
-        error: None,
+        error: run_error.clone(),
         system_theme: Some(system_theme_sender),
 
         #[cfg(feature = "a11y")]
@@ -337,7 +338,7 @@ where
             if let Err(error) =
                 crate::futures::futures::executor::block_on(finish_boot)
             {
-                self.error = Some(Error::GraphicsCreationFailed(error));
+                *self.error.lock().unwrap() = Some(Error::GraphicsCreationFailed(error));
                 event_loop.exit();
             }
 
@@ -445,9 +446,14 @@ where
                                 let position =
                                     window_attributes.position.take();
 
-                                let window = event_loop
-                                    .create_window(window_attributes)
-                                    .expect("Create window");
+                                let window = match event_loop.create_window(window_attributes) {
+                                    Ok(window) => window,
+                                    Err(error) => {
+                                        let _ = on_open.send(Err(error.to_string()));
+                                        self.process_event(event_loop, Some(Event::WindowCreationFailed { id, error }));
+                                        continue;
+                                    }
+                                };
 
                                 #[cfg(target_os = "macos")]
                                 if let Some(position) = position {
@@ -535,7 +541,7 @@ where
                                 break;
                             }
                             Control::Crash(error) => {
-                                self.error = Some(error);
+                                *self.error.lock().unwrap() = Some(error);
                                 event_loop.exit();
                             }
                             Control::SetAutomaticWindowTabbing(_enabled) => {
@@ -683,7 +689,9 @@ where
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        event_loop.run_app(runner).map_err(error::Error::EventLoop)
+        event_loop.run_app(runner).map_err(error::Error::EventLoop)?;
+        let error = run_error.lock().unwrap().take();
+        error.map_or(Ok(()), Err)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -696,12 +704,13 @@ where
 }
 
 enum Event<Message: 'static> {
+    WindowCreationFailed { id: window::Id, error: winit::error::RequestError },
     WindowCreated {
         id: window::Id,
         window: Arc<dyn winit::window::Window>,
         exit_on_close_request: bool,
         make_visible: bool,
-        on_open: oneshot::Sender<window::Id>,
+        on_open: oneshot::Sender<Result<window::Id, String>>,
         resize_border: u32,
     },
     Exit,
@@ -731,7 +740,7 @@ enum Control {
         settings: window::Settings,
         title: String,
         monitor: Option<winit::monitor::MonitorHandle>,
-        on_open: oneshot::Sender<window::Id>,
+        on_open: oneshot::Sender<Result<window::Id, String>>,
         scale_factor: f64,
     },
     SetAutomaticWindowTabbing(bool),
@@ -877,6 +886,14 @@ async fn run_instance<P>(
         };
 
         match event {
+            Event::WindowCreationFailed { id, error } => {
+                is_window_opening = false;
+                events.push((Some(id), core::Event::Window(window::Event::Closed)));
+                log::error!("could not create window {id:?}: {error}");
+                if !is_daemon && window_manager.is_empty() {
+                    let _ = control_sender.start_send(Control::Crash(Error::WindowCreationFailed(error)));
+                }
+            }
             Event::WindowCreated {
                 id,
                 window,
@@ -906,6 +923,7 @@ async fn run_instance<P>(
                             compositor = Some(comp);
                         }
                         Err(error) => {
+                            let _ = on_open.send(Err(error.to_string()));
                             control_sender
                                 .start_send(Control::Crash(
                                     Error::GraphicsCreationFailed(error),
@@ -933,7 +951,7 @@ async fn run_instance<P>(
                 let compositor: &mut <<P as Program>::Renderer as compositor::Default >::Compositor = compositor
                     .as_mut()
                     .expect("Compositor must be initialized");
-                let window = window_manager.insert(
+                let window = match window_manager.insert(
                     id,
                     window,
                     &program,
@@ -941,7 +959,21 @@ async fn run_instance<P>(
                     exit_on_close_request,
                     system_theme,
                     resize_border,
-                );
+                ) {
+                    Ok(window) => window,
+                    Err(error) => {
+                        log::error!("could not initialize window {id:?}: {error}");
+                        let _ = on_open.send(Err(error.to_string()));
+                        is_window_opening = false;
+                        #[cfg(wayland_platform)]
+                        platform_specific_handler.send_wayland(platform_specific::Action::RemoveWindow(id));
+                        events.push((Some(id), core::Event::Window(window::Event::Closed)));
+                        if !is_daemon && window_manager.is_empty() {
+                            let _ = control_sender.start_send(Control::Exit);
+                        }
+                        continue;
+                    }
+                };
 
                 window.raw.set_theme(conversion::window_theme(
                     window.state.theme_mode(),
@@ -994,7 +1026,7 @@ async fn run_instance<P>(
                     );
                 }
 
-                let _ = on_open.send(id);
+                let _ = on_open.send(Ok(id));
                 is_window_opening = false;
             }
             Event::NewEvents(event::StartCause::Init) => {
@@ -1092,11 +1124,20 @@ async fn run_instance<P>(
                     );
                     layout_span.finish();
 
-                    current_compositor.configure_surface(
+                    if let Err(error) = current_compositor.configure_surface(
                         &mut window.surface,
                         physical_size.width,
                         physical_size.height,
-                    );
+                    ) {
+                        log::error!("could not resize window {id:?}: {error}");
+                        runtime.broadcast(subscription::Event::Interaction {
+                            window: id,
+                            event: core::Event::Window(window::Event::RenderingFailed(error.to_string())),
+                            status: core::event::Status::Ignored,
+                        });
+                        proxy.send_action(Action::Window(runtime::window::Action::Close(id)));
+                        continue;
+                    }
 
                     window.surface_version = window.state.surface_version();
                 }
@@ -1259,9 +1300,15 @@ async fn run_instance<P>(
                         present_span.finish();
                     }
                     Err(error) => match error {
-                        compositor::SurfaceError::OutOfMemory => {
-                            // This is an unrecoverable error.
-                            panic!("{error:?}");
+                        compositor::SurfaceError::OutOfMemory | compositor::SurfaceError::Device(_) => {
+                            present_span.finish();
+                            log::error!("window {id:?}: {error}; closing its surface");
+                            runtime.broadcast(subscription::Event::Interaction {
+                                window: id,
+                                event: core::Event::Window(window::Event::RenderingFailed(error.to_string())),
+                                status: core::event::Status::Ignored,
+                            });
+                            proxy.send_action(Action::Window(runtime::window::Action::Close(id)));
                         }
                         compositor::SurfaceError::Outdated
                         | compositor::SurfaceError::Lost => {
@@ -1271,18 +1318,40 @@ async fn run_instance<P>(
                             let physical_size = window.state.physical_size();
 
                             if error == compositor::SurfaceError::Lost {
-                                window.surface = current_compositor
+                                let surface = current_compositor
                                     .create_surface(
                                         window.raw.clone(),
                                         physical_size.width,
                                         physical_size.height,
                                     );
+                                match surface {
+                                    Ok(surface) => window.surface = surface,
+                                    Err(error) => {
+                                        log::error!("could not recreate window {id:?}: {error}");
+                                        runtime.broadcast(subscription::Event::Interaction {
+                                            window: id,
+                                            event: core::Event::Window(window::Event::RenderingFailed(error.to_string())),
+                                            status: core::event::Status::Ignored,
+                                        });
+                                        proxy.send_action(Action::Window(runtime::window::Action::Close(id)));
+                                        continue;
+                                    }
+                                }
                             } else {
-                                current_compositor.configure_surface(
+                                if let Err(error) = current_compositor.configure_surface(
                                     &mut window.surface,
                                     physical_size.width,
                                     physical_size.height,
-                                );
+                                ) {
+                                    log::error!("could not reconfigure window {id:?}: {error}");
+                                    runtime.broadcast(subscription::Event::Interaction {
+                                        window: id,
+                                        event: core::Event::Window(window::Event::RenderingFailed(error.to_string())),
+                                        status: core::event::Status::Ignored,
+                                    });
+                                    proxy.send_action(Action::Window(runtime::window::Action::Close(id)));
+                                    continue;
+                                }
                             }
 
                             window.raw.request_redraw();
@@ -1771,22 +1840,25 @@ async fn run_instance<P>(
                             }
                         }
                     }) else {
-                        eprintln!("No source surface");
+                        log::debug!("No source surface");
                         continue;
                     };
 
                     let Some(window) = window_manager.get_mut(window_id) else {
-                        eprintln!("No window");
+                        log::debug!("No window");
                         continue;
                     };
 
                     let state = &window.state;
                     let mut dnd_buffer = None;
-                    let icon_surface = icon_surface.map(|i| {
+                    let icon_surface = icon_surface.and_then(|i| {
                         let mut icon_surface =
                             i.downcast::<P::Theme, P::Renderer>();
 
-                        let mut renderer = compositor.create_renderer();
+                        let mut renderer = match compositor.create_renderer() {
+                            Ok(renderer) => renderer,
+                            Err(error) => { log::error!("could not draw the drag icon: {error}"); return None; }
+                        };
 
                         let lim = core::layout::Limits::new(
                             Size::new(1., 1.),
@@ -1839,11 +1911,14 @@ async fn run_instance<P>(
                             },
                             Default::default(),
                         );
-                        let mut bytes = compositor.screenshot(
+                        let mut bytes = match compositor.screenshot(
                             &mut renderer,
                             &viewport,
                             core::Color::TRANSPARENT,
-                        );
+                        ) {
+                            Ok(bytes) => bytes,
+                            Err(error) => { log::error!("could not capture the drag icon: {error}"); return None; }
+                        };
                         for pix in bytes.chunks_exact_mut(4) {
                             // rgba -> argb little endian
                             pix.swap(0, 2);
@@ -1865,15 +1940,15 @@ async fn run_instance<P>(
                                 bytes,
                                 icon_surface.offset,
                             ));
-                            dnd::Icon::Surface(dnd::DndSurface(surface))
+                            Some(dnd::Icon::Surface(dnd::DndSurface(surface)))
                         } else {
                             platform_specific_handler.clear_subsurface_list();
-                            dnd::Icon::Buffer {
+                            Some(dnd::Icon::Buffer {
                                 data: Arc::new(bytes),
                                 width: viewport.physical_width(),
                                 height: viewport.physical_height(),
                                 transparent: true,
-                            }
+                            })
                         }
                     });
 
@@ -2401,21 +2476,22 @@ where
                 }
             }
             window::Action::Screenshot(id, channel) => {
-                if let Some(window) = window_manager.get_mut(id)
+                let result = if let Some(window) = window_manager.get_mut(id)
                     && let Some(compositor) = compositor
                 {
-                    let bytes = compositor.screenshot(
+                    compositor.screenshot(
                         &mut window.renderer,
                         window.state.viewport(),
                         window.state.background_color(),
-                    );
-
-                    let _ = channel.send(core::window::Screenshot::new(
+                    ).map(|bytes| core::window::Screenshot::new(
                         bytes,
                         window.state.physical_size(),
                         window.state.scale_factor() as f32,
-                    ));
-                }
+                    )).map_err(|error| error.to_string())
+                } else {
+                    Err("the window is no longer available".into())
+                };
+                let _ = channel.send(result);
             }
             window::Action::EnableMousePassthrough(id) => {
                 if let Some(window) = window_manager.get_mut(id) {
@@ -2497,11 +2573,13 @@ where
                     if let Some(compositor) = compositor {
                         let graphics_info = compositor.information();
 
-                        let _ = std::thread::spawn(move || {
+                        if let Err(error) = std::thread::Builder::new().name("ct-system-info".into()).spawn(move || {
                             let information = system_information(graphics_info);
 
                             let _ = _channel.send(information);
-                        });
+                        }) {
+                            log::error!("could not start the system-information worker: {error}");
+                        }
                     }
                 }
             }

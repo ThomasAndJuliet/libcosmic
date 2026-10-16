@@ -368,28 +368,28 @@ where
                 // Position is set to the center of the widget
                 let width = node.size().width;
                 let height = node.size().height;
-                position.x = (position.x - width / 2.0).clamp(0.0, bounds.width - width);
-                position.y = (position.y - height / 2.0).clamp(0.0, bounds.height - height);
+                position.x = (position.x - width / 2.0).clamp(0.0, (bounds.width - width).max(0.0));
+                position.y = (position.y - height / 2.0).clamp(0.0, (bounds.height - height).max(0.0));
             }
             Position::Top => {
                 let width = node.size().width;
                 let height = node.size().height;
-                position.x = (position.x - width / 2.0).clamp(0.0, bounds.width - width);
-                position.y = (position.y - height).clamp(0.0, bounds.height - height);
+                position.x = (position.x - width / 2.0).clamp(0.0, (bounds.width - width).max(0.0));
+                position.y = (position.y - height).clamp(0.0, (bounds.height - height).max(0.0));
             }
             Position::Bottom | Position::BelowAt(_) => {
                 // Position is set to the center bottom of the widget
                 let width = node.size().width;
                 let height = node.size().height;
-                position.x = (position.x - width / 2.0).clamp(0.0, bounds.width - width);
-                position.y = position.y.clamp(0.0, bounds.height - height);
+                position.x = (position.x - width / 2.0).clamp(0.0, (bounds.width - width).max(0.0));
+                position.y = position.y.clamp(0.0, (bounds.height - height).max(0.0));
             }
             Position::Point(_) => {
                 // Position is using context menu logic
                 let size = node.size();
-                position.x = position.x.clamp(0.0, bounds.width - size.width);
+                position.x = position.x.clamp(0.0, (bounds.width - size.width).max(0.0));
                 if position.y + size.height > bounds.height {
-                    position.y = (position.y - size.height).clamp(0.0, bounds.height - size.height);
+                    position.y = (position.y - size.height).clamp(0.0, (bounds.height - size.height).max(0.0));
                 }
             }
         }

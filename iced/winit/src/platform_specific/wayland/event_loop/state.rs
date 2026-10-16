@@ -2066,7 +2066,7 @@ impl SctkState {
                 loc.y -= size.height;
             },
             wayland_protocols::xdg::shell::client::xdg_positioner::Gravity::BottomRight => {},
-            _ => unimplemented!(),
+            _ => { log::debug!("ignoring an unsupported Wayland value"); },
         };
         let bounds = Rectangle::new(loc, size);
 

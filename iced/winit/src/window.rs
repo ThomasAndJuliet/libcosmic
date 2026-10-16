@@ -62,7 +62,7 @@ where
         exit_on_close_request: bool,
         system_theme: theme::Mode,
         resize_border: u32,
-    ) -> &mut Window<P, C> {
+    ) -> Result<&mut Window<P, C>, iced_graphics::compositor::SurfaceError> {
         let state = State::new(program, id, system_theme, window.as_ref());
         let surface_size = state.physical_size();
         let surface_version = state.surface_version();
@@ -70,8 +70,8 @@ where
             window.clone(),
             surface_size.width,
             surface_size.height,
-        );
-        let renderer = compositor.create_renderer();
+        )?;
+        let renderer = compositor.create_renderer()?;
 
         self.aliases.retain(|w, i| *w != window.id() && *i != id);
         let _ = self.aliases.insert(window.id(), id);
@@ -101,9 +101,9 @@ where
             },
         );
 
-        self.entries
+        Ok(self.entries
             .get_mut(&id)
-            .expect("Get window that was just inserted")
+            .expect("Get window that was just inserted"))
     }
 
     pub fn is_empty(&self) -> bool {

@@ -464,6 +464,6 @@ impl renderer::Headless for Renderer {
     ) -> Vec<u8> {
         let viewport = Viewport::with_physical_size(size, scale_factor as f64);
 
-        window::compositor::screenshot(self, &viewport, background_color)
+        window::compositor::screenshot(self, &viewport, background_color).unwrap_or_default()
     }
 }

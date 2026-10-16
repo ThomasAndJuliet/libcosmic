@@ -37,7 +37,7 @@ impl crate::graphics::Compositor for Compositor {
     ) -> Result<Self, Error> {
         match backend {
             None | Some("tiny-skia") | Some("tiny_skia") => {
-                Ok(new(settings.into(), display))
+                new(settings.into(), display)
             }
             Some(backend) => Err(Error::GraphicsAdapterNotFound {
                 backend: "tiny-skia",
@@ -48,11 +48,11 @@ impl crate::graphics::Compositor for Compositor {
         }
     }
 
-    fn create_renderer(&self) -> Self::Renderer {
-        Renderer::new(
+    fn create_renderer(&self) -> Result<Self::Renderer, compositor::SurfaceError> {
+        Ok(Renderer::new(
             self.settings.default_font,
             self.settings.default_text_size,
-        )
+        ))
     }
 
     fn create_surface<W: compositor::Window + Clone>(
@@ -60,26 +60,26 @@ impl crate::graphics::Compositor for Compositor {
         window: W,
         width: u32,
         height: u32,
-    ) -> Self::Surface {
+    ) -> Result<Self::Surface, compositor::SurfaceError> {
         let window = softbuffer::Surface::new(
             &self.context,
             Box::new(window.clone()) as _,
         )
-        .expect("Create softbuffer surface for window");
+        .map_err(|error| compositor::SurfaceError::Creation(error.to_string()))?;
 
         let mut surface = Surface {
             window,
-            clip_mask: tiny_skia::Mask::new(1, 1).expect("Create clip mask"),
+            clip_mask: tiny_skia::Mask::new(1, 1).ok_or(compositor::SurfaceError::OutOfMemory)?,
             layer_stack: VecDeque::new(),
             background_color: Color::TRANSPARENT,
             max_age: 0,
         };
 
         if width > 0 && height > 0 {
-            self.configure_surface(&mut surface, width, height);
+            self.configure_surface(&mut surface, width, height)?;
         }
 
-        surface
+        Ok(surface)
     }
 
     fn configure_surface(
@@ -87,18 +87,20 @@ impl crate::graphics::Compositor for Compositor {
         surface: &mut Self::Surface,
         width: u32,
         height: u32,
-    ) {
+    ) -> Result<(), compositor::SurfaceError> {
+        let (Some(width), Some(height)) = (NonZeroU32::new(width), NonZeroU32::new(height)) else { return Ok(()) };
         surface
             .window
             .resize(
-                NonZeroU32::new(width).expect("Non-zero width"),
-                NonZeroU32::new(height).expect("Non-zero height"),
+                width,
+                height,
             )
-            .expect("Resize surface");
+            .map_err(|error| compositor::SurfaceError::Creation(error.to_string()))?;
 
         surface.clip_mask =
-            tiny_skia::Mask::new(width, height).expect("Create clip mask");
+            tiny_skia::Mask::new(width.get(), height.get()).ok_or(compositor::SurfaceError::OutOfMemory)?;
         surface.layer_stack.clear();
+        Ok(())
     }
 
     fn information(&self) -> Information {
@@ -130,7 +132,7 @@ impl crate::graphics::Compositor for Compositor {
         renderer: &mut Self::Renderer,
         viewport: &Viewport,
         background_color: Color,
-    ) -> Vec<u8> {
+    ) -> Result<Vec<u8>, compositor::SurfaceError> {
         screenshot(renderer, viewport, background_color)
     }
 }
@@ -138,12 +140,35 @@ impl crate::graphics::Compositor for Compositor {
 pub fn new(
     settings: Settings,
     display: impl compositor::Display,
-) -> Compositor {
+) -> Result<Compositor, Error> {
     #[allow(unsafe_code)]
     let context = softbuffer::Context::new(Box::new(display) as _)
-        .expect("Create softbuffer context");
+        .map_err(|error| Error::BackendError(error.to_string()))?;
 
-    Compositor { context, settings }
+    Ok(Compositor { context, settings })
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_software_display_is_an_error() {
+        struct UnavailableDisplay;
+        impl raw_window_handle::HasDisplayHandle for UnavailableDisplay {
+            fn display_handle(&self) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+                Err(raw_window_handle::HandleError::Unavailable)
+            }
+        }
+        assert!(new(Settings::default(), UnavailableDisplay).is_err());
+    }
+
+    #[test]
+    fn empty_software_captures_are_refused_before_allocation() {
+        let mut renderer = Renderer::new(Default::default(), 14.0.into());
+        let viewport = Viewport::with_physical_size(Size::new(0, 100), 1.0);
+        assert_eq!(screenshot(&mut renderer, &viewport, Color::TRANSPARENT), Err(compositor::SurfaceError::InvalidDimensions));
+    }
 }
 
 pub fn present(
@@ -204,7 +229,7 @@ pub fn present(
             physical_size.width,
             physical_size.height,
         )
-        .expect("Create pixel map");
+        .ok_or(compositor::SurfaceError::InvalidDimensions)?;
 
         renderer.draw(
             &mut pixels,
@@ -223,14 +248,17 @@ pub fn screenshot(
     renderer: &mut Renderer,
     viewport: &Viewport,
     background_color: Color,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, compositor::SurfaceError> {
     let size = viewport.physical_size();
 
-    let mut offscreen_buffer: Vec<u32> =
-        vec![0; size.width as usize * size.height as usize];
+    if size.width == 0 || size.height == 0 { return Err(compositor::SurfaceError::InvalidDimensions) }
+    let pixels = (size.width as usize).checked_mul(size.height as usize).ok_or(compositor::SurfaceError::InvalidDimensions)?;
+    let mut offscreen_buffer: Vec<u32> = Vec::new();
+    offscreen_buffer.try_reserve_exact(pixels).map_err(|_| compositor::SurfaceError::OutOfMemory)?;
+    offscreen_buffer.resize(pixels, 0);
 
     let mut clip_mask = tiny_skia::Mask::new(size.width, size.height)
-        .expect("Create clip mask");
+        .ok_or(compositor::SurfaceError::OutOfMemory)?;
 
     renderer.draw(
         &mut tiny_skia::PixmapMut::from_bytes(
@@ -238,7 +266,7 @@ pub fn screenshot(
             size.width,
             size.height,
         )
-        .expect("Create offscreen pixel map"),
+        .ok_or(compositor::SurfaceError::InvalidDimensions)?,
         &mut clip_mask,
         viewport,
         &[Rectangle::with_size(Size::new(
@@ -248,8 +276,11 @@ pub fn screenshot(
         background_color,
     );
 
-    offscreen_buffer.iter().fold(
-        Vec::with_capacity(offscreen_buffer.len() * 4),
+    let bytes = pixels.checked_mul(4).ok_or(compositor::SurfaceError::InvalidDimensions)?;
+    let mut output = Vec::new();
+    output.try_reserve_exact(bytes).map_err(|_| compositor::SurfaceError::OutOfMemory)?;
+    Ok(offscreen_buffer.iter().fold(
+        output,
         |mut acc, pixel| {
             const A_MASK: u32 = 0xFF_00_00_00;
             const R_MASK: u32 = 0x00_FF_00_00;
@@ -264,5 +295,5 @@ pub fn screenshot(
             acc.extend([r, g, b, a]);
             acc
         },
-    )
+    ))
 }

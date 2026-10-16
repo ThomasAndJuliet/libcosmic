@@ -187,7 +187,11 @@ impl Renderer {
         &mut self,
         viewport: &Viewport,
         background_color: Color,
-    ) -> Vec<u8> {
+    ) -> Result<Vec<u8>, graphics::compositor::SurfaceError> {
+        use graphics::compositor::SurfaceError;
+        if viewport.physical_width() == 0 || viewport.physical_height() == 0 {
+            return Err(SurfaceError::InvalidDimensions);
+        }
         #[derive(Clone, Copy, Debug)]
         struct BufferDimensions {
             width: u32,
@@ -252,11 +256,12 @@ impl Renderer {
             },
         );
 
+        let buffer_bytes = dimensions.padded_bytes_per_row.checked_mul(dimensions.height as usize)
+            .ok_or(SurfaceError::InvalidDimensions)?;
         let output_buffer =
             self.engine.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("iced_wgpu.offscreen.output_texture_buffer"),
-                size: (dimensions.padded_bytes_per_row
-                    * dimensions.height as usize) as u64,
+                size: buffer_bytes as u64,
                 usage: wgpu::BufferUsages::MAP_READ
                     | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
@@ -280,22 +285,27 @@ impl Renderer {
         self.staging_belt.recall();
 
         let slice = output_buffer.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let (mapped, completion) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| { let _ = mapped.send(result); });
 
         let _ = self.engine.device.poll(wgpu::PollType::Wait {
             submission_index: Some(index),
-            timeout: None,
-        });
+            timeout: Some(std::time::Duration::from_secs(2)),
+        }).map_err(|error| SurfaceError::Device(error.to_string()))?;
+        completion.try_recv().map_err(|error| SurfaceError::Device(error.to_string()))?
+            .map_err(|error| SurfaceError::Device(error.to_string()))?;
 
         let mapped_buffer = slice.get_mapped_range();
 
-        mapped_buffer.chunks(dimensions.padded_bytes_per_row).fold(
-            vec![],
+        let mut output = Vec::new();
+        output.try_reserve_exact(buffer_bytes).map_err(|_| SurfaceError::OutOfMemory)?;
+        Ok(mapped_buffer.chunks(dimensions.padded_bytes_per_row).fold(
+            output,
             |mut acc, row| {
                 acc.extend(&row[..dimensions.unpadded_bytes_per_row]);
                 acc
             },
-        )
+        ))
     }
 
     fn prepare(
@@ -1036,6 +1046,6 @@ impl renderer::Headless for Renderer {
         self.screenshot(
             &Viewport::with_physical_size(size, scale_factor as f64),
             background_color,
-        )
+        ).unwrap_or_default()
     }
 }

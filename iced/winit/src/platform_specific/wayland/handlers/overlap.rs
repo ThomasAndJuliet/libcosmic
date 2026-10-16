@@ -105,7 +105,7 @@ impl Dispatch<ZcosmicOverlapNotificationV1, OverlapNotificationV1, SctkState>
             zcosmic_overlap_notification_v1::Event::LayerLeave {
                 identifier,
             } => SctkEvent::OverlapLayerRemove { identifier, surface },
-            _ => unimplemented!(),
+            _ => return,
         });
     }
 

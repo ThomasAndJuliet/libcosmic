@@ -30,7 +30,9 @@ pub struct SctkWinitWindow {
 
 impl Drop for SctkWinitWindow {
     fn drop(&mut self) {
-        self.tx.send(Action::Dropped(self.id)).unwrap();
+        // The event loop may already have ended during shutdown or a
+        // failed surface initialization.
+        let _ = self.tx.send(Action::Dropped(self.id));
     }
 }
 
@@ -238,7 +240,7 @@ impl winit::window::Window for SctkWinitWindow {
     }
 
     fn set_transparent(&self, transparent: bool) {
-        todo!()
+        // Wrapped Wayland surfaces get transparency from their buffers.
     }
 
     fn rwh_06_display_handle(
@@ -422,7 +424,7 @@ impl winit::window::Window for SctkWinitWindow {
         &self,
         _hittest: bool,
     ) -> Result<(), winit::error::RequestError> {
-        todo!()
+        Err(RequestError::NotSupported(NotSupportedError::new("Cursor hit testing is not supported for this Wayland surface.")))
     }
 
     fn surface_position(&self) -> winit::dpi::PhysicalPosition<i32> {
@@ -442,29 +444,29 @@ impl winit::window::Window for SctkWinitWindow {
         &self,
         position: winit::dpi::Position,
     ) -> Result<(), winit::error::RequestError> {
-        todo!()
+        Err(RequestError::NotSupported(NotSupportedError::new("Cursor positioning is not supported on Wayland.")))
     }
 
     fn set_cursor_grab(
         &self,
         mode: winit::window::CursorGrabMode,
     ) -> Result<(), winit::error::RequestError> {
-        todo!()
+        Err(RequestError::NotSupported(NotSupportedError::new("Cursor grabbing is not supported for this Wayland surface.")))
     }
 
     fn safe_area(&self) -> winit::dpi::PhysicalInsets<u32> {
-        todo!()
+        winit::dpi::PhysicalInsets::default()
     }
 
     fn request_ime_update(
         &self,
         request: winit::window::ImeRequest,
     ) -> Result<(), winit::window::ImeRequestError> {
-        todo!()
+        Err(winit::window::ImeRequestError::NotSupported)
     }
 
     fn ime_capabilities(&self) -> Option<winit::window::ImeCapabilities> {
-        todo!()
+        None
     }
 }
 
@@ -496,8 +498,7 @@ impl raw_window_handle::HasDisplayHandle for SctkWinitWindow {
     > {
         let raw = raw_window_handle::WaylandDisplayHandle::new({
             let ptr = self.display.id().as_ptr();
-            std::ptr::NonNull::new(ptr as *mut _)
-                .expect("wl_proxy should never be null")
+            std::ptr::NonNull::new(ptr as *mut _).ok_or(HandleError::Unavailable)?
         });
 
         unsafe { Ok(raw_window_handle::DisplayHandle::borrow_raw(raw.into())) }

@@ -801,7 +801,8 @@ impl SctkEvent {
                         };
                     }
                     let compositor = compositor.as_mut().unwrap();
-                    let window = window_manager.insert(
+                    let raw_id = winit::window::Window::id(sctk_winit.as_ref());
+                    let window = match window_manager.insert(
                         surface_id,
                         sctk_winit,
                         program,
@@ -809,7 +810,21 @@ impl SctkEvent {
                         false, // TODO do we want to get this value here?
                         theme::Mode::None, // TODO do we really need to track the system theme here?
                         0,
-                    );
+                    ) {
+                        Ok(window) => window,
+                        Err(error) => {
+                            log::error!("could not create Wayland surface {surface_id:?}: {error}");
+                            if clipboard.window_id() == Some(raw_id) {
+                                *clipboard = window_manager.first().map(|window| Clipboard::connect(
+                                    window.raw.clone(), crate::clipboard::ControlSender { sender: control_sender.clone(), proxy: proxy.clone() },
+                                )).unwrap_or_else(Clipboard::unconnected);
+                            }
+                            surface_ids.retain(|_, id| id.inner() != surface_id);
+                            events.push((Some(surface_id), iced_runtime::core::Event::Window(window::Event::RenderingFailed(error.to_string()))));
+                            events.push((Some(surface_id), iced_runtime::core::Event::Window(window::Event::Closed)));
+                            return;
+                        }
+                    };
                     _ = surface_ids.insert(object_id, wrapper.clone());
                     let logical_size = window.logical_size();
 
@@ -1019,7 +1034,8 @@ impl SctkEvent {
                             return;
                         };
 
-                        let window = window_manager.insert(
+                        let raw_id = winit::window::Window::id(sctk_winit.as_ref());
+                        let window = match window_manager.insert(
                             surface_id,
                             sctk_winit,
                             program,
@@ -1027,7 +1043,21 @@ impl SctkEvent {
                             false, // TODO do we want to get this value here?
                             theme::Mode::None, // TODO do we really need to track the system theme here?
                             0,
-                        );
+                        ) {
+                            Ok(window) => window,
+                            Err(error) => {
+                                log::error!("could not create Wayland surface {surface_id:?}: {error}");
+                                if clipboard.window_id() == Some(raw_id) {
+                                    *clipboard = window_manager.first().map(|window| Clipboard::connect(
+                                        window.raw.clone(), crate::clipboard::ControlSender { sender: control_sender.clone(), proxy: proxy.clone() },
+                                    )).unwrap_or_else(Clipboard::unconnected);
+                                }
+                                surface_ids.retain(|_, id| id.inner() != surface_id);
+                                events.push((Some(surface_id), iced_runtime::core::Event::Window(window::Event::RenderingFailed(error.to_string()))));
+                                events.push((Some(surface_id), iced_runtime::core::Event::Window(window::Event::Closed)));
+                                return;
+                            }
+                        };
                         window.state.set_ready(false);
                         let logical_size = window.logical_size();
 
@@ -1273,7 +1303,8 @@ impl SctkEvent {
                 }
                 let compositor = compositor.as_mut().unwrap();
 
-                let window = window_manager.insert(
+                let raw_id = winit::window::Window::id(sctk_winit.as_ref());
+                let window = match window_manager.insert(
                     surface_id,
                     sctk_winit,
                     program,
@@ -1281,7 +1312,21 @@ impl SctkEvent {
                     false, // TODO do we want to get this value here?
                     theme::Mode::None, // TODO do we really need to track the system theme here?
                     0,
-                );
+                ) {
+                    Ok(window) => window,
+                    Err(error) => {
+                        log::error!("could not create Wayland surface {surface_id:?}: {error}");
+                        if clipboard.window_id() == Some(raw_id) {
+                            *clipboard = window_manager.first().map(|window| Clipboard::connect(
+                                window.raw.clone(), crate::clipboard::ControlSender { sender: control_sender.clone(), proxy: proxy.clone() },
+                            )).unwrap_or_else(Clipboard::unconnected);
+                        }
+                        surface_ids.retain(|_, id| id.inner() != surface_id);
+                        events.push((Some(surface_id), iced_runtime::core::Event::Window(window::Event::RenderingFailed(error.to_string()))));
+                        events.push((Some(surface_id), iced_runtime::core::Event::Window(window::Event::Closed)));
+                        return;
+                    }
+                };
                 _ = surface_ids.insert(object_id, wrapper.clone());
                 let logical_size = window.logical_size();
                 let mut ui = crate::build_user_interface(
@@ -1601,7 +1646,8 @@ impl SctkEvent {
                     }
                     let compositor = compositor.as_mut().unwrap();
 
-                    let window = window_manager.insert(
+                    let raw_id = winit::window::Window::id(sctk_winit.as_ref());
+                    let window = match window_manager.insert(
                         surface_id,
                         sctk_winit,
                         program,
@@ -1609,7 +1655,21 @@ impl SctkEvent {
                         false, // TODO do we want to get this value here?
                         theme::Mode::None,
                         0,
-                    );
+                    ) {
+                        Ok(window) => window,
+                        Err(error) => {
+                            log::error!("could not create Wayland surface {surface_id:?}: {error}");
+                            if clipboard.window_id() == Some(raw_id) {
+                                *clipboard = window_manager.first().map(|window| Clipboard::connect(
+                                    window.raw.clone(), crate::clipboard::ControlSender { sender: control_sender.clone(), proxy: proxy.clone() },
+                                )).unwrap_or_else(Clipboard::unconnected);
+                            }
+                            surface_ids.retain(|_, id| id.inner() != surface_id);
+                            events.push((Some(surface_id), iced_runtime::core::Event::Window(window::Event::RenderingFailed(error.to_string()))));
+                            events.push((Some(surface_id), iced_runtime::core::Event::Window(window::Event::Closed)));
+                            return;
+                        }
+                    };
                     let logical_size = window.logical_size();
 
                     let mut ui = crate::build_user_interface(

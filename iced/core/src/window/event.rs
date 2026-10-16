@@ -22,6 +22,10 @@ pub enum Event {
     /// A window was closed.
     Closed,
 
+    /// This window could not render a frame because graphics resources
+    /// were exhausted. Other windows can remain open.
+    RenderingFailed(String),
+
     /// A window was moved.
     Moved(Point),
 

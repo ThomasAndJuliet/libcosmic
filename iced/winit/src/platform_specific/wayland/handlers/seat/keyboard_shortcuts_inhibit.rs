@@ -46,7 +46,7 @@ impl
                     inhibitor.destroy();
                 }
             }
-            _ => unimplemented!(),
+            _ => { log::debug!("ignoring an unsupported Wayland value"); },
         }
     }
 }

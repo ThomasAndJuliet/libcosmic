@@ -47,7 +47,7 @@ impl Dispatch<CosmicCornerRadiusToplevelV1, ()> for SctkState {
         _qhandle: &sctk::reexports::client::QueueHandle<Self>,
     ) {
         match event {
-            _ => unimplemented!(),
+            _ => { log::debug!("ignoring an unsupported Wayland value"); },
         }
     }
 }
@@ -62,7 +62,7 @@ impl Dispatch<CosmicCornerRadiusLayerV1, ()> for SctkState {
         _qhandle: &sctk::reexports::client::QueueHandle<Self>,
     ) {
         match event {
-            _ => unimplemented!(),
+            _ => { log::debug!("ignoring an unsupported Wayland value"); },
         }
     }
 }

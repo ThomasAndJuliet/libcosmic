@@ -335,13 +335,13 @@ where
         Err(graphics::Error::List(errors))
     }
 
-    fn create_renderer(&self) -> Self::Renderer {
+    fn create_renderer(&self) -> Result<Self::Renderer, compositor::SurfaceError> {
         match self {
             Self::Primary(compositor) => {
-                Renderer::Primary(compositor.create_renderer())
+                compositor.create_renderer().map(Renderer::Primary)
             }
             Self::Secondary(compositor) => {
-                Renderer::Secondary(compositor.create_renderer())
+                compositor.create_renderer().map(Renderer::Secondary)
             }
         }
     }
@@ -351,14 +351,10 @@ where
         window: W,
         width: u32,
         height: u32,
-    ) -> Self::Surface {
+    ) -> Result<Self::Surface, compositor::SurfaceError> {
         match self {
-            Self::Primary(compositor) => Surface::Primary(
-                compositor.create_surface(window, width, height),
-            ),
-            Self::Secondary(compositor) => Surface::Secondary(
-                compositor.create_surface(window, width, height),
-            ),
+            Self::Primary(compositor) => compositor.create_surface(window, width, height).map(Surface::Primary),
+            Self::Secondary(compositor) => compositor.create_surface(window, width, height).map(Surface::Secondary),
         }
     }
 
@@ -367,13 +363,13 @@ where
         surface: &mut Self::Surface,
         width: u32,
         height: u32,
-    ) {
+    ) -> Result<(), compositor::SurfaceError> {
         match (self, surface) {
             (Self::Primary(compositor), Surface::Primary(surface)) => {
-                compositor.configure_surface(surface, width, height);
+                compositor.configure_surface(surface, width, height)
             }
             (Self::Secondary(compositor), Surface::Secondary(surface)) => {
-                compositor.configure_surface(surface, width, height);
+                compositor.configure_surface(surface, width, height)
             }
             _ => unreachable!(),
         }
@@ -427,7 +423,7 @@ where
         renderer: &mut Self::Renderer,
         viewport: &graphics::Viewport,
         background_color: Color,
-    ) -> Vec<u8> {
+    ) -> Result<Vec<u8>, compositor::SurfaceError> {
         match (self, renderer) {
             (Self::Primary(compositor), Renderer::Primary(renderer)) => {
                 compositor.screenshot(renderer, viewport, background_color)

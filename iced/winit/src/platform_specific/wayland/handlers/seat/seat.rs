@@ -141,7 +141,7 @@ impl SeatHandler for SctkState {
                     _ = my_seat.touch.replace(touch);
                 }
             }
-            _ => unimplemented!(),
+            _ => { log::debug!("ignoring an unsupported Wayland value"); },
         }
 
         if let Some(text_input_manager) = self
@@ -203,7 +203,7 @@ impl SeatHandler for SctkState {
                     });
                 }
             }
-            _ => unimplemented!(),
+            _ => { log::debug!("ignoring an unsupported Wayland value"); },
         }
 
         if let Some(text_input) = self.text_input.take() {

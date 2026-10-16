@@ -1,5 +1,6 @@
 //! Connect a window with a renderer.
 use wgpu::Backends;
+use std::sync::{Arc, Mutex};
 
 use crate::core::Color;
 use crate::graphics::color;
@@ -22,11 +23,54 @@ pub struct Compositor {
     alpha_mode: wgpu::CompositeAlphaMode,
     engine: Engine,
     settings: Settings,
+    failures: GraphicsFailures,
+}
+
+/// Wgpu's default uncaptured-error handler panics, including on resource
+/// exhaustion. Record the first error until the operation can return it.
+#[derive(Clone, Default)]
+struct GraphicsFailures(Arc<Mutex<Option<compositor::SurfaceError>>>);
+
+impl GraphicsFailures {
+    fn record(&self, error: compositor::SurfaceError) {
+        log::error!("{error}");
+        let _ = self.0.lock().unwrap().get_or_insert(error);
+    }
+
+    fn uncaptured(&self, error: wgpu::Error) {
+        self.record(match error {
+            wgpu::Error::OutOfMemory { .. } => compositor::SurfaceError::OutOfMemory,
+            other => compositor::SurfaceError::Device(other.to_string()),
+        });
+    }
+
+    fn check(&self) -> Result<(), compositor::SurfaceError> {
+        self.0.lock().unwrap().take().map_or(Ok(()), Err)
+    }
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+
+    #[test]
+    fn uncaptured_resource_errors_are_returned_without_losing_the_first_cause() {
+        let failures = GraphicsFailures::default();
+        failures.uncaptured(wgpu::Error::OutOfMemory { source: Box::new(std::io::Error::other("out of graphics memory")) });
+        failures.record(compositor::SurfaceError::Device("a later validation failure".into()));
+        assert_eq!(failures.check(), Err(compositor::SurfaceError::OutOfMemory));
+        assert_eq!(failures.check(), Ok(()));
+        failures.record(compositor::SurfaceError::Device("the device was lost".into()));
+        assert_eq!(failures.check(), Err(compositor::SurfaceError::Device("the device was lost".into())));
+    }
 }
 
 /// A compositor error.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum Error {
+    /// Resources needed to initialize this backend could not be allocated.
+    #[error("graphics resources are unavailable: {0}")]
+    ResourcesUnavailable(String),
     /// The surface creation failed.
     #[error("the surface creation failed: {0}")]
     SurfaceCreationFailed(#[from] wgpu::CreateSurfaceError),
@@ -297,6 +341,15 @@ impl Compositor {
 
             match result {
                 Ok((device, queue)) => {
+                    let failures = GraphicsFailures::default();
+                    let reported = failures.clone();
+                    device.on_uncaptured_error(Arc::new(move |error| reported.uncaptured(error)));
+                    let lost = failures.clone();
+                    device.set_device_lost_callback(move |reason, message| {
+                        if reason != wgpu::DeviceLostReason::Destroyed {
+                            lost.record(compositor::SurfaceError::Device(format!("{reason:?}: {message}")));
+                        }
+                    });
                     let engine = Engine::new(
                         &adapter,
                         device,
@@ -306,6 +359,7 @@ impl Compositor {
                         shell,
                     );
 
+                    failures.check().map_err(|error| Error::ResourcesUnavailable(error.to_string()))?;
                     return Ok(Compositor {
                         instance,
                         adapter,
@@ -313,6 +367,7 @@ impl Compositor {
                         alpha_mode,
                         engine,
                         settings,
+                        failures,
                     });
                 }
                 Err(error) => {
@@ -423,12 +478,15 @@ impl graphics::Compositor for Compositor {
         }
     }
 
-    fn create_renderer(&self) -> Self::Renderer {
-        Renderer::new(
+    fn create_renderer(&self) -> Result<Self::Renderer, compositor::SurfaceError> {
+        self.failures.check()?;
+        let renderer = Renderer::new(
             self.engine.clone(),
             self.settings.default_font,
             self.settings.default_text_size,
-        )
+        );
+        self.failures.check()?;
+        Ok(renderer)
     }
 
     fn create_surface<W: compositor::Window>(
@@ -436,17 +494,19 @@ impl graphics::Compositor for Compositor {
         window: W,
         width: u32,
         height: u32,
-    ) -> Self::Surface {
+    ) -> Result<Self::Surface, compositor::SurfaceError> {
+        self.failures.check()?;
         let mut surface = self
             .instance
             .create_surface(window)
-            .expect("Create surface");
+            .map_err(|error| compositor::SurfaceError::Creation(error.to_string()))?;
 
         if width > 0 && height > 0 {
-            self.configure_surface(&mut surface, width, height);
+            self.configure_surface(&mut surface, width, height)?;
         }
 
-        surface
+        self.failures.check()?;
+        Ok(surface)
     }
 
     fn configure_surface(
@@ -454,7 +514,9 @@ impl graphics::Compositor for Compositor {
         surface: &mut Self::Surface,
         width: u32,
         height: u32,
-    ) {
+    ) -> Result<(), compositor::SurfaceError> {
+        if width == 0 || height == 0 { return Ok(()) }
+        self.failures.check()?;
         surface.configure(
             &self.engine.device,
             &wgpu::SurfaceConfiguration {
@@ -468,6 +530,7 @@ impl graphics::Compositor for Compositor {
                 desired_maximum_frame_latency: 1,
             },
         );
+        self.failures.check()
     }
 
     fn information(&self) -> compositor::Information {
@@ -487,13 +550,16 @@ impl graphics::Compositor for Compositor {
         background_color: Color,
         on_pre_present: impl FnOnce(),
     ) -> Result<(), compositor::SurfaceError> {
-        present(
+        self.failures.check()?;
+        let result = present(
             renderer,
             surface,
             viewport,
             background_color,
             on_pre_present,
-        )
+        );
+        self.failures.check()?;
+        result
     }
 
     fn screenshot(
@@ -501,7 +567,10 @@ impl graphics::Compositor for Compositor {
         renderer: &mut Self::Renderer,
         viewport: &Viewport,
         background_color: Color,
-    ) -> Vec<u8> {
-        renderer.screenshot(viewport, background_color)
+    ) -> Result<Vec<u8>, compositor::SurfaceError> {
+        self.failures.check()?;
+        let result = renderer.screenshot(viewport, background_color);
+        self.failures.check()?;
+        result
     }
 }

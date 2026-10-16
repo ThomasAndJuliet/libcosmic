@@ -40,7 +40,7 @@ pub trait Compositor: Sized {
     ) -> impl Future<Output = Result<Self, Error>>;
 
     /// Creates a [`Self::Renderer`] for the [`Compositor`].
-    fn create_renderer(&self) -> Self::Renderer;
+    fn create_renderer(&self) -> Result<Self::Renderer, SurfaceError>;
 
     /// Crates a new [`Surface`] for the given window.
     ///
@@ -50,7 +50,7 @@ pub trait Compositor: Sized {
         window: W,
         width: u32,
         height: u32,
-    ) -> Self::Surface;
+    ) -> Result<Self::Surface, SurfaceError>;
 
     /// Configures a new [`Surface`] with the given dimensions.
     ///
@@ -60,7 +60,7 @@ pub trait Compositor: Sized {
         surface: &mut Self::Surface,
         width: u32,
         height: u32,
-    );
+    ) -> Result<(), SurfaceError>;
 
     /// Returns [`Information`] used by this [`Compositor`].
     fn information(&self) -> Information;
@@ -95,7 +95,7 @@ pub trait Compositor: Sized {
         renderer: &mut Self::Renderer,
         viewport: &Viewport,
         background_color: Color,
-    ) -> Vec<u8>;
+    ) -> Result<Vec<u8>, SurfaceError>;
 }
 
 /// A window that can be used in a [`Compositor`].
@@ -129,6 +129,12 @@ pub trait Default {
 /// Result of an unsuccessful call to [`Compositor::present`].
 #[derive(Clone, PartialEq, Eq, Debug, Error)]
 pub enum SurfaceError {
+    /// The platform could not allocate or connect a drawing surface.
+    #[error("could not create a drawing surface: {0}")]
+    Creation(String),
+    /// The graphics device reported a failure while preparing a frame.
+    #[error("graphics device failure: {0}")]
+    Device(String),
     /// A timeout was encountered while trying to acquire the next frame.
     #[error("A timeout was encountered while trying to acquire the next frame")]
     Timeout,
@@ -184,14 +190,15 @@ impl Compositor for () {
         Ok(())
     }
 
-    fn create_renderer(&self) -> Self::Renderer {}
+    fn create_renderer(&self) -> Result<Self::Renderer, SurfaceError> { Ok(()) }
 
     fn create_surface<W: Window + Clone>(
         &mut self,
         _window: W,
         _width: u32,
         _height: u32,
-    ) -> Self::Surface {
+    ) -> Result<Self::Surface, SurfaceError> {
+        Ok(())
     }
 
     fn configure_surface(
@@ -199,7 +206,8 @@ impl Compositor for () {
         _surface: &mut Self::Surface,
         _width: u32,
         _height: u32,
-    ) {
+    ) -> Result<(), SurfaceError> {
+        Ok(())
     }
 
     fn load_font(&mut self, _font: Cow<'static, [u8]>) {}
@@ -227,8 +235,8 @@ impl Compositor for () {
         _renderer: &mut Self::Renderer,
         _viewport: &Viewport,
         _background_color: Color,
-    ) -> Vec<u8> {
-        vec![]
+    ) -> Result<Vec<u8>, SurfaceError> {
+        Ok(vec![])
     }
 }
 

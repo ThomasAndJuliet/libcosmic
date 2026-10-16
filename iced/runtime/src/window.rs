@@ -17,7 +17,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle, WindowHandle};
 /// An operation to be performed on some window.
 pub enum Action {
     /// Open a new window with some [`Settings`].
-    Open(Id, Settings, oneshot::Sender<Id>),
+    Open(Id, Settings, oneshot::Sender<Result<Id, String>>),
 
     /// Close the window and exits the application.
     Close(Id),
@@ -152,7 +152,7 @@ pub enum Action {
     Run(Id, Box<dyn FnOnce(&dyn Window) + Send>),
 
     /// Screenshot the viewport of the window.
-    Screenshot(Id, oneshot::Sender<Screenshot>),
+    Screenshot(Id, oneshot::Sender<Result<Screenshot, String>>),
 
     /// Enable mouse passthrough for the given window.
     ///
@@ -301,6 +301,16 @@ pub fn close_requests() -> Subscription<Id> {
 /// Opens a new window with the given [`Settings`]; producing the [`Id`]
 /// of the new window on completion.
 pub fn open(settings: Settings) -> (Id, Task<Id>) {
+    let (id, task) = try_open(settings);
+    (id, task.then(|result| match result {
+        Ok(id) => Task::done(id),
+        Err(_) => Task::none(),
+    }))
+}
+
+/// Opens a window and reports a platform or graphics initialization failure.
+/// Success means the window and its initial user interface exist.
+pub fn try_open(settings: Settings) -> (Id, Task<Result<Id, String>>) {
     let id = Id::unique();
 
     (
@@ -530,6 +540,14 @@ where
 
 /// Captures a [`Screenshot`] from the window.
 pub fn screenshot(id: Id) -> Task<Screenshot> {
+    try_screenshot(id).then(|result| match result {
+        Ok(screenshot) => Task::done(screenshot),
+        Err(_) => Task::none(),
+    })
+}
+
+/// Captures a window, reporting closed windows and failed readbacks.
+pub fn try_screenshot(id: Id) -> Task<Result<Screenshot, String>> {
     task::oneshot(move |channel| {
         crate::Action::Window(Action::Screenshot(id, channel))
     })

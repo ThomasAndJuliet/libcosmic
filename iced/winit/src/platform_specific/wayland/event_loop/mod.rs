@@ -75,6 +75,8 @@ pub struct SctkEventLoop {
 pub enum Error {
     Calloop(calloop::Error),
     Global(GlobalError),
+    GlobalBind(String),
+    Thread(std::io::Error),
     NoDisplayHandle,
     NoWaylandDisplay,
 }
@@ -106,7 +108,7 @@ impl SctkEventLoop {
 
         let (action_tx, action_rx) = calloop::channel::channel();
         let res: std::thread::JoinHandle<Result<(), Error>> =
-            std::thread::spawn(move || {
+            std::thread::Builder::new().name("ct-wayland".into()).spawn(move || {
                 let _display = connection.display();
                 let (globals, event_queue) =
                     registry_queue_init(&connection).map_err(Error::Global)?;
@@ -300,7 +302,7 @@ impl SctkEventLoop {
                                             loc.y -= size.height;
                                         },
                                         wayland_protocols::xdg::shell::client::xdg_positioner::Gravity::BottomRight => {},
-                                        _ => unimplemented!(),
+                                        _ => { log::debug!("ignoring an unsupported Wayland value"); },
                                     };
                                     subsurface.instance.wl_subsurface.set_position(loc.x as i32, loc.y as i32);
 
@@ -312,7 +314,7 @@ impl SctkEventLoop {
                         }
                     }
                 })
-                .unwrap();
+                .map_err(|error| Error::Calloop(error.error))?;
                 let wayland_source =
                     WaylandSource::new(connection.clone(), event_queue);
 
@@ -324,7 +326,7 @@ impl SctkEventLoop {
                 let _wayland_source_dispatcher = event_loop
                     .handle()
                     .register_dispatcher(wayland_dispatcher.clone())
-                    .unwrap();
+                    .map_err(Error::Calloop)?;
 
                 let (viewporter_state, fractional_scaling_manager) =
                     match FractionalScalingManager::new(&globals, &qh) {
@@ -358,11 +360,11 @@ impl SctkEventLoop {
                         seat_state: SeatState::new(&globals, &qh),
                         output_state: OutputState::new(&globals, &qh),
                         compositor_state: CompositorState::bind(&globals, &qh)
-                            .expect("wl_compositor is not available"),
+                            .map_err(|error| Error::GlobalBind(error.to_string()))?,
                         shm_state: Shm::bind(&globals, &qh)
-                            .expect("wl_shm is not available"),
+                            .map_err(|error| Error::GlobalBind(error.to_string()))?,
                         xdg_shell_state: XdgShell::bind(&globals, &qh)
-                            .expect("xdg shell is not available"),
+                            .map_err(|error| Error::GlobalBind(error.to_string()))?,
                         layer_shell: LayerShell::bind(&globals, &qh).ok(),
                         activation_state: ActivationState::bind(&globals, &qh)
                             .ok(),
@@ -442,7 +444,7 @@ impl SctkEventLoop {
                     .state
                     .registry_state
                     .bind_one(&state.state.queue_handle, 1..=6, GlobalData)
-                    .unwrap();
+                    .map_err(|error| Error::GlobalBind(error.to_string()))?;
                 let wl_subcompositor = state.state.registry_state.bind_one(
                     &state.state.queue_handle,
                     1..=1,
@@ -457,7 +459,7 @@ impl SctkEventLoop {
                     .state
                     .registry_state
                     .bind_one(&state.state.queue_handle, 1..=1, GlobalData)
-                    .unwrap();
+                    .map_err(|error| Error::GlobalBind(error.to_string()))?;
                 let wp_dmabuf = state
                     .state
                     .registry_state
@@ -586,7 +588,10 @@ impl SctkEventLoop {
                         state.state.proxy.wake_up();
                     }
                 }
-            });
+            }).map_err(|error| {
+                log::error!("could not start the Wayland worker: {error}");
+                Box::new(Error::Thread(error)) as Box<dyn std::any::Any + Send>
+            })?;
 
         if res.is_finished() {
             log::warn!("SCTK thread finished.");

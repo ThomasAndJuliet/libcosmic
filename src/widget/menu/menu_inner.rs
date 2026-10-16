@@ -1572,7 +1572,7 @@ where
         // calc new index
         let height_diff = (overlay_cursor.y
             - (last_children_bounds.y + last_menu_state.scroll_offset))
-            .clamp(0.0, last_children_bounds.height - 0.001);
+            .clamp(0.0, (last_children_bounds.height - 0.001).max(0.0));
 
         let active_root = if menu.is_overlay {
             &state.active_root
