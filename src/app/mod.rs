@@ -48,6 +48,14 @@ pub(crate) fn iced_settings<App: Application>(
         crate::icon_theme::set_default(crate::config::icon_theme());
     }
 
+    // The desktop's theme as saved, rather than the built-in dark one, until the desktop is
+    // first heard from: an app that starts from it does not then open dark on a light desktop
+    core.system_theme = match settings.theme.theme_type {
+        crate::theme::ThemeType::System {
+            prefer_dark: None, ..
+        } => settings.theme.clone(),
+        _ => crate::theme::system_preference(),
+    };
     THEME.lock().unwrap().set_theme(settings.theme.theme_type);
 
     if settings.no_main_window {
