@@ -808,21 +808,42 @@ impl Theme {
         oklcha.l = cur_oklcha.l;
         let adjusted_c: Srgb = oklcha.into_color();
 
-        let is_dark = self.is_dark;
-
-        let mut builder = if is_dark {
-            ThemeBuilder::dark_config()
-                .ok()
-                .and_then(|h| ThemeBuilder::get_entry(&h).ok())
-                .unwrap_or_else(ThemeBuilder::dark)
-        } else {
-            ThemeBuilder::light_config()
-                .ok()
-                .and_then(|h| ThemeBuilder::get_entry(&h).ok())
-                .unwrap_or_else(ThemeBuilder::light)
+        // The builder of this theme (not the desktop's saved one): its colours are given as
+        // overrides, so that only what derives from the accent changes
+        let palette = self.palette.clone();
+        let palette = match (self.is_dark, self.is_high_contrast) {
+            (true, false) => CosmicPalette::Dark(palette),
+            (false, false) => CosmicPalette::Light(palette),
+            (true, true) => CosmicPalette::HighContrastDark(palette),
+            (false, true) => CosmicPalette::HighContrastLight(palette),
         };
-        builder = builder.accent(adjusted_c);
-        builder.build()
+        let mut theme = ThemeBuilder {
+            palette,
+            spacing: self.spacing,
+            corner_radii: self.corner_radii,
+            neutral_tint: self.control_tint,
+            bg_color: Some(self.background.base),
+            primary_container_bg: Some(self.primary.base),
+            secondary_container_bg: Some(self.secondary.base),
+            text_tint: self.text_tint,
+            accent: Some(adjusted_c),
+            success: Some(self.success.base.color),
+            warning: Some(self.warning.base.color),
+            destructive: Some(self.destructive.base.color),
+            frosted: self.frosted,
+            gaps: self.gaps,
+            active_hint: self.active_hint,
+            window_hint: self.window_hint,
+            frosted_windows: self.frosted_windows,
+            frosted_system_interface: self.frosted_system_interface,
+            frosted_panel: self.frosted_panel,
+            frosted_applets: self.frosted_applets,
+            frosted_maximized_apps: self.frosted_maximized_apps,
+            alpha_map: self.alpha_map,
+        }
+        .build();
+        theme.name.clone_from(&self.name);
+        theme
     }
 
     /// choose default color palette based on preferred GTK color scheme
@@ -1916,5 +1937,42 @@ mod tests {
         assert_eq!(light.active_hint, 7);
         assert!(!light.is_dark);
         _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// `c` at the lightness of `theme`'s accent, as `with_accent` sets it
+    fn at_accent_lightness(theme: &Theme, c: Srgba) -> Srgb {
+        let mut oklcha: Oklcha = c.into_color();
+        let current: Oklcha = theme.accent_color().into_color();
+        oklcha.l = current.l;
+        oklcha.into_color()
+    }
+
+    #[test]
+    fn with_accent_rebuilds_the_theme_it_is_called_on() {
+        let green = Srgba::new(0.2, 0.7, 0.3, 1.0);
+        let custom = ThemeBuilder::light()
+            .bg_color(Srgba::new(0.95, 0.9, 0.85, 1.0))
+            .primary_container_bg(Srgba::new(0.9, 0.92, 0.95, 1.0))
+            .neutral_tint(Srgb::new(0.5, 0.4, 0.3))
+            .text_tint(Srgb::new(0.1, 0.2, 0.3))
+            .warning(Srgb::new(0.9, 0.6, 0.1));
+        let mut custom = ThemeBuilder {
+            gaps: (2, 4),
+            frosted_windows: true,
+            ..custom
+        };
+        custom.secondary_container_bg = Some(Srgba::new(0.8, 0.85, 0.9, 1.0));
+
+        for builder in [
+            ThemeBuilder::dark(),
+            ThemeBuilder::light(),
+            ThemeBuilder::dark_high_contrast(),
+            ThemeBuilder::light_high_contrast(),
+            custom,
+        ] {
+            let theme = builder.clone().build();
+            let expected = builder.accent(at_accent_lightness(&theme, green)).build();
+            assert_eq!(theme.with_accent(green), expected);
+        }
     }
 }
