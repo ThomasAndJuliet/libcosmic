@@ -113,6 +113,31 @@ impl<'a, Message: Clone + 'static> Item<'a, Message> {
         flex_item_row(self.control_(widget.into()))
     }
 
+    /// Assigns a control centred on the first `lines` lines of the item's
+    /// text (the title's lines first), rather than on the whole row.
+    ///
+    /// With `lines` set to 2, the control stays level with a one-line
+    /// title and the first line of its description, however long the
+    /// description runs.
+    pub fn control_lines(
+        self,
+        lines: usize,
+        widget: impl Into<Element<'a, Message>>,
+    ) -> super::ControlLines<'a, Message> {
+        super::control_lines(self.control(widget), lines)
+    }
+
+    /// Assigns a control which flexes, centred on the first `lines` lines
+    /// of the item's text, as [`Item::control_lines`]. A control that has
+    /// wrapped below the text stays there.
+    pub fn flex_control_lines(
+        self,
+        lines: usize,
+        widget: impl Into<Element<'a, Message>>,
+    ) -> super::ControlLines<'a, Message> {
+        super::control_lines(self.flex_control(widget), lines)
+    }
+
     fn label(self) -> Element<'a, Message> {
         if let Some(description) = self.description {
             column::with_capacity(2)

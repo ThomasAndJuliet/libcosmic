@@ -1,9 +1,11 @@
 // Copyright 2022 System76 <info@system76.com>
 // SPDX-License-Identifier: MPL-2.0
 
+pub mod control_lines;
 pub mod item;
 pub mod section;
 
+pub use self::control_lines::{ControlLines, control_lines};
 pub use self::item::{flex_item, flex_item_row, item, item_row};
 pub use self::section::{Section, section};
 
