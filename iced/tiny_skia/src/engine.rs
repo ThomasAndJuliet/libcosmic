@@ -16,6 +16,9 @@ pub struct Engine {
     pub(crate) raster_pipeline: crate::raster::Pipeline,
     #[cfg(feature = "svg")]
     pub(crate) vector_pipeline: crate::vector::Pipeline,
+
+    /// The bounds the clip mask was last set to in this frame
+    clip_bounds: Option<Rectangle>,
 }
 
 impl Engine {
@@ -26,6 +29,24 @@ impl Engine {
             raster_pipeline: crate::raster::Pipeline::new(),
             #[cfg(feature = "svg")]
             vector_pipeline: crate::vector::Pipeline::new(),
+            clip_bounds: None,
+        }
+    }
+
+    /// Forget which bounds the clip mask holds, at the start of a frame:
+    /// the mask may since have been replaced, resized or drawn into.
+    pub fn forget_clip(&mut self) {
+        self.clip_bounds = None;
+    }
+
+    /// Set the clip mask to `bounds`, unless it holds them already. Each
+    /// refill clears the whole window-sized mask, so a layer whose text
+    /// runs, fills and strokes share one clip would otherwise clear it once
+    /// per draw (iced-rs/iced#3368).
+    pub fn clip_to(&mut self, clip_mask: &mut tiny_skia::Mask, bounds: Rectangle) {
+        if self.clip_bounds != Some(bounds) {
+            adjust_clip_mask(clip_mask, bounds);
+            self.clip_bounds = Some(bounds);
         }
     }
 
@@ -367,7 +388,7 @@ impl Engine {
                     match physical_bounds.is_within_strict(&clip_bounds) {
                         true => None,
                         false => {
-                            adjust_clip_mask(clip_mask, clip_bounds);
+                            self.clip_to(clip_mask, clip_bounds);
                             Some(clip_mask as &_)
                         }
                     };
@@ -406,7 +427,7 @@ impl Engine {
                     match physical_bounds.is_within_strict(&clip_bounds) {
                         true => None,
                         false => {
-                            adjust_clip_mask(clip_mask, clip_bounds);
+                            self.clip_to(clip_mask, clip_bounds);
                             Some(clip_mask as &_)
                         }
                     };
@@ -442,7 +463,7 @@ impl Engine {
                     match physical_bounds.is_within_strict(&clip_bounds) {
                         true => None,
                         false => {
-                            adjust_clip_mask(clip_mask, clip_bounds);
+                            self.clip_to(clip_mask, clip_bounds);
                             Some(clip_mask as &_)
                         }
                     };
@@ -490,7 +511,7 @@ impl Engine {
                 let clip_mask = match physical_bounds.is_within(&clip_bounds) {
                     true => None,
                     false => {
-                        adjust_clip_mask(clip_mask, clip_bounds);
+                        self.clip_to(clip_mask, clip_bounds);
                         Some(clip_mask as &_)
                     }
                 };
@@ -537,7 +558,7 @@ impl Engine {
                 let clip_mask = match physical_bounds.is_within(&clip_bounds) {
                     true => None,
                     false => {
-                        adjust_clip_mask(clip_mask, clip_bounds);
+                        self.clip_to(clip_mask, clip_bounds);
                         Some(clip_mask as &_)
                     }
                 };
@@ -575,7 +596,7 @@ impl Engine {
                 let clip_mask = match physical_bounds.is_within(&clip_bounds) {
                     true => None,
                     false => {
-                        adjust_clip_mask(clip_mask, clip_bounds);
+                        self.clip_to(clip_mask, clip_bounds);
                         Some(clip_mask as &_)
                     }
                 };
