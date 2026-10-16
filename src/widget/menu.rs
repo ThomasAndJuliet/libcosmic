@@ -76,6 +76,8 @@ pub use menu_tree::{
 };
 
 pub use crate::style::menu_bar::{Appearance, StyleSheet};
+#[cfg(wayland_platform)]
+pub(crate) use menu_bar::popup_shield;
 pub(crate) use menu_bar::{menu_roots_children, menu_roots_diff};
 pub use menu_inner::{CloseCondition, ItemHeight, ItemWidth, PathHighlight};
 pub(crate) use menu_inner::{Direction, Menu, init_root_menu};

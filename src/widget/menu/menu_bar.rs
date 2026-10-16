@@ -783,7 +783,12 @@ where
             && self.on_surface_action.is_some()
             && self.window_id != window::Id::NONE
         {
-            return None;
+            return popup_shield(
+                tree.state.downcast_ref::<MenuBarState>(),
+                self.window_id,
+                layout.bounds() + translation,
+                self.on_surface_action.as_ref(),
+            );
         }
 
         let state = tree.state.downcast_ref::<MenuBarState>();
@@ -826,6 +831,82 @@ where
     }
 }
 
+/// While a menu's native popup is open, an overlay over its parent window that takes a
+/// press anywhere but on `bar`: it closes the popup and keeps the press from the widgets
+/// under it. A press on `bar` is left to the menu bar.
+#[cfg(wayland_platform)]
+pub(crate) fn popup_shield<'a, Message: 'a>(
+    state: &MenuBarState,
+    window_id: window::Id,
+    bar: Rectangle,
+    on_surface_action: Option<
+        &Arc<dyn Fn(crate::surface::Action<Message>) -> Message + Send + Sync + 'static>,
+    >,
+) -> Option<overlay::Element<'a, Message, crate::Theme, Renderer>> {
+    struct Shield<Message> {
+        state: MenuBarState,
+        window_id: window::Id,
+        bar: Rectangle,
+        on_surface_action: Arc<dyn Fn(crate::surface::Action<Message>) -> Message + Send + Sync>,
+    }
+
+    impl<Message> overlay::Overlay<Message, crate::Theme, Renderer> for Shield<Message> {
+        fn layout(&mut self, _renderer: &Renderer, bounds: iced::Size) -> Node {
+            Node::new(bounds)
+        }
+
+        fn draw(
+            &self,
+            _renderer: &mut Renderer,
+            _theme: &crate::Theme,
+            _style: &renderer::Style,
+            _layout: Layout<'_>,
+            _cursor: Cursor,
+        ) {
+        }
+
+        fn update(
+            &mut self,
+            event: &event::Event,
+            _layout: Layout<'_>,
+            cursor: Cursor,
+            _renderer: &Renderer,
+            _clipboard: &mut dyn Clipboard,
+            shell: &mut Shell<'_, Message>,
+        ) {
+            if matches!(
+                event,
+                event::Event::Mouse(mouse::Event::ButtonPressed(_))
+                    | event::Event::Touch(touch::Event::FingerPressed { .. })
+            ) && !cursor.is_over(self.bar)
+            {
+                self.state.inner.with_data_mut(|state| {
+                    if let Some(id) = state.popup_id.remove(&self.window_id) {
+                        shell.publish((self.on_surface_action)(
+                            crate::surface::action::destroy_popup(id),
+                        ));
+                        state.reset();
+                        shell.capture_event();
+                    }
+                });
+            }
+        }
+    }
+
+    let on_surface_action = on_surface_action?.clone();
+    state
+        .inner
+        .with_data(|d| d.popup_id.contains_key(&window_id))
+        .then(|| {
+            overlay::Element::new(Box::new(Shield {
+                state: state.clone(),
+                window_id,
+                bar,
+                on_surface_action,
+            }))
+        })
+}
+
 #[allow(unused_results, clippy::too_many_arguments)]
 fn process_root_events<Message>(
     menu_roots: &mut [MenuTree<Message>],
@@ -863,9 +944,12 @@ mod tests {
     use iced::advanced::renderer::Headless;
     use iced_runtime::user_interface::{Cache, UserInterface};
 
-    #[derive(Clone, Debug)]
+    #[derive(Clone)]
     enum Message {
-        Item,
+        Item(&'static str),
+        Under,
+        #[cfg_attr(not(wayland_platform), allow(dead_code))]
+        Surface(crate::surface::Action<Self>),
     }
 
     fn renderer() -> Renderer {
@@ -879,7 +963,7 @@ mod tests {
 
     fn item() -> MenuTree<Message> {
         MenuTree::from(crate::Element::from(
-            crate::widget::button::text("Item").on_press(Message::Item),
+            crate::widget::button::text("Item").on_press(Message::Item("Item")),
         ))
     }
 
@@ -947,5 +1031,179 @@ mod tests {
             );
             cache = ui.into_cache();
         }
+    }
+
+    /// A button, then File and Edit menus of one item each, as Cerea's header has
+    /// its sidebar toggle before its menu bar
+    fn button_then_bar(window: Option<window::Id>) -> crate::Element<'static, Message> {
+        let roots = ["File", "Edit"]
+            .into_iter()
+            .map(|title| {
+                let root = super::super::root::<Message, Renderer>(title)
+                    .width(80)
+                    .height(40);
+                let item = crate::widget::button::text(title)
+                    .on_press(Message::Item(title))
+                    .width(Length::Fill);
+                MenuTree::with_children(
+                    crate::widget::RcElementWrapper::new(crate::Element::from(root)),
+                    vec![MenuTree::from(crate::Element::from(item))],
+                )
+            })
+            .collect();
+        let mut bar = menu_bar(roots);
+        if let Some(window) = window {
+            bar = bar.window_id(window).on_surface_action(Message::Surface);
+        }
+        crate::widget::row::with_children(vec![
+            crate::widget::button::text("Under")
+                .on_press(Message::Under)
+                .width(60)
+                .height(40)
+                .into(),
+            bar.into(),
+        ])
+        .into()
+    }
+
+    const UNDER: Point = Point::new(30.0, 20.0);
+    const FILE: Point = Point::new(100.0, 20.0);
+    const EDIT: Point = Point::new(180.0, 20.0);
+    /// Edit's item
+    const ITEM: Point = Point::new(190.0, 56.0);
+
+    /// Moves to `at`, then presses and releases `button` there, one frame each.
+    /// Returns every message, and whether the press was captured.
+    fn click(
+        ui: &mut UserInterface<'_, Message, crate::Theme, Renderer>,
+        renderer: &mut Renderer,
+        at: Point,
+        button: mouse::Button,
+    ) -> (Vec<Message>, bool) {
+        let mut messages = Vec::new();
+        let mut captured = false;
+        for event in [
+            mouse::Event::CursorMoved { position: at },
+            mouse::Event::ButtonPressed(button),
+            mouse::Event::ButtonReleased(button),
+        ] {
+            let (_, statuses) = ui.update(
+                &[iced::Event::Mouse(event)],
+                Cursor::Available(at),
+                renderer,
+                &mut iced_core::clipboard::Null,
+                &mut messages,
+            );
+            if matches!(event, mouse::Event::ButtonPressed(_)) {
+                captured = statuses[0] == event::Status::Captured;
+            }
+        }
+        (messages, captured)
+    }
+
+    fn hover(
+        ui: &mut UserInterface<'_, Message, crate::Theme, Renderer>,
+        renderer: &mut Renderer,
+        at: Point,
+    ) {
+        _ = ui.update(
+            &[iced::Event::Mouse(mouse::Event::CursorMoved {
+                position: at,
+            })],
+            Cursor::Available(at),
+            renderer,
+            &mut iced_core::clipboard::Null,
+            &mut Vec::new(),
+        );
+    }
+
+    /// Clicks a root, then moves on it as a pointer does, so an in-window menu is laid out
+    fn open(
+        ui: &mut UserInterface<'_, Message, crate::Theme, Renderer>,
+        renderer: &mut Renderer,
+        root: Point,
+    ) -> Vec<Message> {
+        let (messages, _) = click(ui, renderer, root, mouse::Button::Left);
+        hover(ui, renderer, root + Vector::new(1.0, 0.0));
+        messages
+    }
+
+    fn under(messages: &[Message]) -> bool {
+        messages.iter().any(|m| matches!(m, Message::Under))
+    }
+
+    #[test]
+    fn a_click_outside_an_in_window_menu_only_closes_it() {
+        let mut renderer = renderer();
+        let mut ui = UserInterface::build(
+            button_then_bar(None),
+            iced::Size::new(400.0, 300.0),
+            Cache::default(),
+            &mut renderer,
+        );
+        _ = open(&mut ui, &mut renderer, FILE);
+        // The button cannot see the pointer under the menu, but the press used to
+        // reach every widget that acts without it
+        let (messages, captured) = click(&mut ui, &mut renderer, UNDER, mouse::Button::Left);
+        assert!(captured, "the closing press is swallowed");
+        assert!(!under(&messages));
+        // The menu is closed, so the next click reaches the button
+        let (messages, _) = click(&mut ui, &mut renderer, UNDER, mouse::Button::Left);
+        assert!(under(&messages));
+
+        // Moving to another root with File open opens Edit, whose item takes clicks
+        _ = open(&mut ui, &mut renderer, FILE);
+        // Two moves, as the first only closes File's menu
+        hover(&mut ui, &mut renderer, EDIT);
+        hover(&mut ui, &mut renderer, EDIT + Vector::new(1.0, 0.0));
+        let (messages, _) = click(&mut ui, &mut renderer, ITEM, mouse::Button::Left);
+        assert!(messages.iter().any(|m| matches!(m, Message::Item("Edit"))));
+        // Clicking a root with a menu open closes the menus, as before
+        _ = open(&mut ui, &mut renderer, FILE);
+        _ = click(&mut ui, &mut renderer, EDIT, mouse::Button::Left);
+        let (messages, _) = click(&mut ui, &mut renderer, UNDER, mouse::Button::Left);
+        assert!(under(&messages));
+    }
+
+    #[cfg(wayland_platform)]
+    #[test]
+    fn a_click_outside_a_native_menu_only_closes_it() {
+        use crate::app::cosmic::{WINDOWING_SYSTEM, WindowingSystem};
+        _ = WINDOWING_SYSTEM.set(WindowingSystem::Wayland);
+        let popup = |messages: &[Message]| {
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::Surface(crate::surface::Action::Popup(..))))
+        };
+        let destroyed = |messages: &[Message]| {
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::Surface(crate::surface::Action::DestroyPopup(_))))
+        };
+        let mut renderer = renderer();
+        let mut ui = UserInterface::build(
+            button_then_bar(Some(window::Id::unique())),
+            iced::Size::new(400.0, 300.0),
+            Cache::default(),
+            &mut renderer,
+        );
+        let messages = open(&mut ui, &mut renderer, FILE);
+        assert!(popup(&messages));
+        let (messages, captured) = click(&mut ui, &mut renderer, UNDER, mouse::Button::Left);
+        assert!(
+            captured && !under(&messages),
+            "the closing click is swallowed"
+        );
+        assert!(destroyed(&messages));
+        let (messages, _) = click(&mut ui, &mut renderer, UNDER, mouse::Button::Left);
+        assert!(under(&messages));
+
+        // The bar still handles its own clicks: moving to Edit with File open opens
+        // Edit, and clicking it closes the menu, as before
+        _ = open(&mut ui, &mut renderer, FILE);
+        let (messages, _) = click(&mut ui, &mut renderer, EDIT, mouse::Button::Left);
+        assert!(popup(&messages) && destroyed(&messages));
+        let (messages, _) = click(&mut ui, &mut renderer, FILE, mouse::Button::Left);
+        assert!(popup(&messages), "the menu was closed");
     }
 }

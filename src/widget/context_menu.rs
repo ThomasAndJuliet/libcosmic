@@ -609,7 +609,21 @@ impl<Message: 'static + Clone> Widget<Message, crate::Theme, crate::Renderer>
             && self.window_id != window::Id::NONE
             && self.on_surface_action.is_some()
         {
-            return content;
+            let shield = menu::popup_shield(
+                &tree
+                    .state
+                    .downcast_ref::<LocalState<Message>>()
+                    .menu_bar_state,
+                self.window_id,
+                iced::Rectangle::default(),
+                self.on_surface_action.as_ref(),
+            );
+            return match (content, shield) {
+                (Some(content), Some(shield)) => {
+                    Some(iced_core::overlay::Group::with_children(vec![content, shield]).overlay())
+                }
+                (content, shield) => content.or(shield),
+            };
         }
 
         let state = tree.state.downcast_ref::<LocalState<Message>>();
@@ -714,6 +728,7 @@ mod tests {
     #[derive(Clone)]
     enum Message {
         Click,
+        Closed,
         Surface(crate::surface::Action<Self>),
     }
 
@@ -811,5 +826,130 @@ mod tests {
                 &mut Vec::new(),
             );
         }
+    }
+
+    /// A button, then two rows with context menus; the first reports when it closes
+    fn button_then_rows(window: Option<window::Id>) -> crate::Element<'static, Message> {
+        let row = |closed: bool| {
+            let content = crate::widget::container(crate::widget::text("Row"))
+                .width(Length::Fill)
+                .height(40);
+            let menu = vec![menu::Tree::new(crate::Element::from(
+                crate::widget::button::text("Open"),
+            ))];
+            let mut row = context_menu(content, Some(menu));
+            if closed {
+                row = row.on_close(Message::Closed);
+            }
+            if let Some(window) = window {
+                row = row.window_id(window).on_surface_action(Message::Surface);
+            }
+            crate::Element::from(row)
+        };
+        crate::widget::column::with_children(vec![
+            crate::widget::button::text("Under")
+                .on_press(Message::Click)
+                .width(300)
+                .height(40)
+                .into(),
+            row(true),
+            row(false),
+        ])
+        .into()
+    }
+
+    const UNDER: Point = Point::new(100.0, 20.0);
+    const ROW_A: Point = Point::new(100.0, 60.0);
+    const ROW_B: Point = Point::new(100.0, 100.0);
+
+    /// Moves to `at`, then presses and releases `button` there, one frame each, then
+    /// moves again as a pointer does. Returns every message, and whether the press
+    /// was captured.
+    fn click(
+        ui: &mut UserInterface<'_, Message, crate::Theme, crate::Renderer>,
+        renderer: &mut crate::Renderer,
+        at: Point,
+        button: mouse::Button,
+    ) -> (Vec<Message>, bool) {
+        let mut messages = Vec::new();
+        let mut captured = false;
+        for event in [
+            mouse::Event::CursorMoved { position: at },
+            mouse::Event::ButtonPressed(button),
+            mouse::Event::ButtonReleased(button),
+            mouse::Event::CursorMoved { position: at },
+        ] {
+            let (_, statuses) = ui.update(
+                &[Event::Mouse(event)],
+                mouse::Cursor::Available(at),
+                renderer,
+                &mut iced_core::clipboard::Null,
+                &mut messages,
+            );
+            if matches!(event, mouse::Event::ButtonPressed(_)) {
+                captured = statuses[0] == iced::event::Status::Captured;
+            }
+        }
+        (messages, captured)
+    }
+
+    fn renderer() -> crate::Renderer {
+        iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
+            iced::Font::default(),
+            iced::Pixels(14.0),
+            Some("tiny-skia"),
+        ))
+        .expect("a headless renderer")
+    }
+
+    fn has(messages: &[Message], f: impl Fn(&Message) -> bool) -> bool {
+        messages.iter().any(f)
+    }
+
+    #[test]
+    fn a_click_outside_a_native_context_menu_only_closes_it() {
+        _ = WINDOWING_SYSTEM.set(WindowingSystem::Wayland);
+        let popup = |m: &Message| matches!(m, Message::Surface(crate::surface::Action::Popup(..)));
+        let destroyed =
+            |m: &Message| matches!(m, Message::Surface(crate::surface::Action::DestroyPopup(_)));
+        let mut renderer = renderer();
+        let mut ui = UserInterface::build(
+            button_then_rows(Some(window::Id::unique())),
+            Size::new(300.0, 200.0),
+            Cache::default(),
+            &mut renderer,
+        );
+        let (messages, _) = click(&mut ui, &mut renderer, ROW_A, mouse::Button::Right);
+        assert!(has(&messages, popup));
+        let (messages, captured) = click(&mut ui, &mut renderer, UNDER, mouse::Button::Left);
+        assert!(captured, "the closing press is swallowed");
+        assert!(!has(&messages, |m| matches!(m, Message::Click)));
+        assert!(has(&messages, destroyed));
+        assert!(has(&messages, |m| matches!(m, Message::Closed)));
+        let (messages, _) = click(&mut ui, &mut renderer, UNDER, mouse::Button::Left);
+        assert!(has(&messages, |m| matches!(m, Message::Click)));
+
+        // A right click on another row closes this menu and opens that row's
+        _ = click(&mut ui, &mut renderer, ROW_A, mouse::Button::Right);
+        let (messages, _) = click(&mut ui, &mut renderer, ROW_B, mouse::Button::Right);
+        assert!(has(&messages, destroyed) && has(&messages, popup));
+    }
+
+    #[test]
+    fn a_click_outside_an_in_window_context_menu_only_closes_it() {
+        let mut renderer = renderer();
+        let mut ui = UserInterface::build(
+            button_then_rows(None),
+            Size::new(300.0, 200.0),
+            Cache::default(),
+            &mut renderer,
+        );
+        _ = click(&mut ui, &mut renderer, ROW_A, mouse::Button::Right);
+        let (messages, captured) = click(&mut ui, &mut renderer, UNDER, mouse::Button::Left);
+        assert!(captured, "the closing press is swallowed");
+        assert!(!has(&messages, |m| matches!(m, Message::Click)));
+        assert!(has(&messages, |m| matches!(m, Message::Closed)));
+        let (messages, _) = click(&mut ui, &mut renderer, UNDER, mouse::Button::Left);
+        assert!(has(&messages, |m| matches!(m, Message::Click)));
     }
 }

@@ -664,6 +664,26 @@ impl<'b, Message: Clone + 'static> Menu<'b, Message> {
                 overlay_offset,
             ),
 
+            // A press outside the menus and the bar closes the menus, and is kept from
+            // what is under them
+            Mouse(ButtonPressed(_)) | Touch(FingerPressed { .. })
+                if self.is_overlay
+                    && self.close_condition.click_outside
+                    && !self.bar_bounds.contains(overlay_cursor)
+                    && self.tree.inner.with_data(|data| {
+                        data.open
+                            && !data
+                                .menu_states
+                                .iter()
+                                .any(|ms| ms.menu_bounds.children_bounds.contains(overlay_cursor))
+                    }) =>
+            {
+                self.tree
+                    .inner
+                    .with_data_mut(|state| self.close_all(state, shell));
+                shell.capture_event();
+            }
+
             Mouse(ButtonPressed(Left)) | Touch(FingerPressed { .. }) => {
                 self.tree.inner.with_data_mut(|data| {
                     data.pressed = true;
