@@ -28,6 +28,8 @@ pub enum Position {
     Point(Point),
     /// Below the content, centred this far from its left edge
     BelowAt(f32),
+    /// Below the content, centred at this window coordinate.
+    BelowAtWindow(f32),
 }
 
 /// A container which displays overlays when a popup widget is assigned.
@@ -277,6 +279,7 @@ where
                 }
                 Position::Top => Point::new(bounds.x + bounds.width / 2.0, bounds.y),
                 Position::BelowAt(x) => Point::new(bounds.x + x, bounds.y + bounds.height),
+                Position::BelowAtWindow(x) => Point::new(x, bounds.y + bounds.height),
             };
 
             // Round position to prevent rendering issues
@@ -377,7 +380,7 @@ where
                 position.x = (position.x - width / 2.0).clamp(0.0, (bounds.width - width).max(0.0));
                 position.y = (position.y - height).clamp(0.0, (bounds.height - height).max(0.0));
             }
-            Position::Bottom | Position::BelowAt(_) => {
+            Position::Bottom | Position::BelowAt(_) | Position::BelowAtWindow(_) => {
                 // Position is set to the center bottom of the widget
                 let width = node.size().width;
                 let height = node.size().height;
