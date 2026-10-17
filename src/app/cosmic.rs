@@ -518,17 +518,16 @@ where
         // Drain any text context-menu popup teardown requests queued by
         // widgets during `app.update()` and destroy them through the normal
         // popup pipeline. Drained before the creation queue so a
-        // destroy-then-recreate (a second right-click reusing the same id)
-        // keeps its order.
+        // replacement closes its old native surface before opening the new one.
         #[cfg(all(wayland_platform, target_os = "linux"))]
-        for id in crate::widget::text_context_menu::take_popup_destroys() {
+        for id in crate::widget::text_context_menu::take_popup_destroys(|id| self.surface_views.contains_key(&id)) {
             task = task.chain(iced_winit::commands::popup::destroy_popup(id));
         }
 
         // Drain any text context-menu popup requests queued by widgets during
         // `app.update()` and create them through the normal popup pipeline.
         #[cfg(all(wayland_platform, target_os = "linux"))]
-        for req in crate::widget::text_context_menu::take_popup_requests() {
+        for req in crate::widget::text_context_menu::take_popup_requests(|parent| self.app.owns_window(parent) || self.surface_views.contains_key(&parent)) {
             let (live_settings, settings, view) =
                 crate::widget::text_context_menu::into_popup_view::<T::Message>(req);
             task = task.chain(self.get_popup(
@@ -1239,6 +1238,8 @@ impl<T: Application> Cosmic<T> {
             }
 
             Action::SurfaceClosed(id) => {
+                #[cfg(all(wayland_platform, target_os = "linux"))]
+                crate::widget::text_context_menu::forget_popup_requests(|parent| parent == id, |popup| popup == id);
                 if self.opened_surfaces.get_mut(&id).is_some_and(|v| {
                     *v = v.saturating_sub(1);
                     *v == 0
@@ -1868,4 +1869,14 @@ fn corners(
             bottom_left: radius_s[3].round() as u32,
         }
     })
+}
+
+#[cfg(all(wayland_platform, target_os = "linux"))]
+impl<App: Application> Drop for Cosmic<App> {
+    fn drop(&mut self) {
+        crate::widget::text_context_menu::forget_popup_requests(
+            |parent| self.app.owns_window(parent) || self.surface_views.contains_key(&parent),
+            |popup| self.surface_views.contains_key(&popup),
+        );
+    }
 }

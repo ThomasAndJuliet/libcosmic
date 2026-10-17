@@ -90,8 +90,15 @@ pub(crate) fn current_window_id() -> iced_core::window::Id {
 
 /// Drains all popup requests queued by widgets this frame.
 #[cfg(wayland_platform)]
-pub(crate) fn take_popup_requests() -> Vec<PopupRequest> {
-    PENDING_POPUP_REQUESTS.with(|q| std::mem::take(&mut *q.borrow_mut()))
+pub(crate) fn take_popup_requests(mut owns: impl FnMut(window::Id) -> bool) -> Vec<PopupRequest> {
+    PENDING_POPUP_REQUESTS.with(|queue| {
+        let mut queue = queue.borrow_mut();
+        let (owned, remaining) = std::mem::take(&mut *queue)
+            .into_iter()
+            .partition(|request: &PopupRequest| owns(request.settings.parent));
+        *queue = remaining;
+        owned
+    })
 }
 
 /// Consumes a [`PopupRequest`], returning the popup settings plus a view
@@ -142,13 +149,23 @@ thread_local! {
 /// flows through the normal surface pipeline.
 #[cfg(wayland_platform)]
 fn queue_destroy_popup(id: iced_core::window::Id) {
-    PENDING_POPUP_DESTROYS.with(|q| q.borrow_mut().push(id));
-    wake_runtime();
+    // A replacement may arrive before the owner installed the first popup.
+    // Cancel that create instead of destroying a surface which never existed.
+    let cancelled = PENDING_POPUP_REQUESTS.with(|queue| {
+        let mut queue = queue.borrow_mut();
+        let before = queue.len();
+        queue.retain(|request| request.settings.id != id);
+        queue.len() != before
+    });
+    if !cancelled {
+        PENDING_POPUP_DESTROYS.with(|queue| queue.borrow_mut().push(id));
+        wake_runtime();
+    }
 }
 
 #[cfg(wayland_platform)]
-static WAKE_TX: std::sync::OnceLock<iced_futures::futures::channel::mpsc::Sender<()>> =
-    std::sync::OnceLock::new();
+static WAKE_SENDERS: std::sync::Mutex<Vec<iced_futures::futures::channel::mpsc::Sender<()>>> =
+    std::sync::Mutex::new(Vec::new());
 
 /// Stable identity for [`wake_subscription`].
 #[cfg(wayland_platform)]
@@ -157,9 +174,15 @@ struct PopupWake;
 /// Nudges the runtime so `Cosmic::update()` runs and drains the popup queues.
 #[cfg(wayland_platform)]
 fn wake_runtime() {
-    if let Some(tx) = WAKE_TX.get() {
-        let _ = tx.clone().try_send(());
-    }
+    let mut senders = WAKE_SENDERS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    senders.retain_mut(|sender| match sender.try_send(()) {
+        Ok(()) => true,
+        // A full queue already has a wake pending; closed subscriptions no
+        // longer own a window and must not prevent the others from waking.
+        Err(error) => !error.is_disconnected(),
+    });
 }
 
 /// Subscription that backs [`wake_runtime`]: it owns the receiving end of the
@@ -175,7 +198,13 @@ pub(crate) fn wake_subscription<Message: Send + 'static>()
             16,
             |mut output: iced_futures::futures::channel::mpsc::Sender<crate::Action<Message>>| async move {
                 let (tx, mut rx) = iced_futures::futures::channel::mpsc::channel(16);
-                let _ = WAKE_TX.set(tx);
+                {
+                    let mut senders = WAKE_SENDERS
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    senders.retain(|sender| !sender.is_closed());
+                    senders.push(tx);
+                }
                 while rx.next().await.is_some() {
                     let _ = output.send(crate::Action::None).await;
                 }
@@ -187,11 +216,34 @@ pub(crate) fn wake_subscription<Message: Send + 'static>()
 /// Drains all popup teardown requests queued by widgets this frame.
 ///
 /// Called by `Cosmic::update()`, which turns each id into a `destroy_popup()`
-/// Task. Drained before the creation queue so a destroy-then-recreate (a
-/// second right-click reusing the same id) keeps its order.
+/// Task. Drained before the creation queue so a replacement closes its old
+/// native surface before opening the new one.
 #[cfg(wayland_platform)]
-pub(crate) fn take_popup_destroys() -> Vec<iced_core::window::Id> {
-    PENDING_POPUP_DESTROYS.with(|q| std::mem::take(&mut *q.borrow_mut()))
+pub(crate) fn take_popup_destroys(mut owns: impl FnMut(window::Id) -> bool) -> Vec<window::Id> {
+    PENDING_POPUP_DESTROYS.with(|queue| {
+        let mut queue = queue.borrow_mut();
+        let (owned, remaining) = std::mem::take(&mut *queue)
+            .into_iter()
+            .partition(|id| owns(*id));
+        *queue = remaining;
+        owned
+    })
+}
+
+/// Discard deferred work when its owner has closed. Other windows' queues
+/// remain intact, including when an outer window host has no main window.
+#[cfg(wayland_platform)]
+pub(crate) fn forget_popup_requests(
+    mut owns_parent: impl FnMut(window::Id) -> bool,
+    mut owns_popup: impl FnMut(window::Id) -> bool,
+) {
+    let _ = PENDING_POPUP_REQUESTS.try_with(|queue| {
+        queue
+            .borrow_mut()
+            .retain(|request| !owns_parent(request.settings.parent))
+    });
+    let _ =
+        PENDING_POPUP_DESTROYS.try_with(|queue| queue.borrow_mut().retain(|id| !owns_popup(*id)));
 }
 
 /// Creates a context menu overlay for any widget implementing
@@ -513,15 +565,12 @@ pub(crate) fn create_text_context_popup(
         state.menu_states.clear();
         state.active_root.clear();
         menu_roots_diff(&mut menu_roots, &mut state.tree);
-        if let Some(id) = state.popup_id.get(&window_id).copied() {
+        if let Some(id) = state.popup_id.remove(&window_id) {
             queue_destroy_popup(id);
-            state.view_cursor = cursor;
-            id
-        } else {
-            state.open = true;
-            state.view_cursor = cursor;
-            iced::window::Id::unique()
         }
+        state.open = true;
+        state.view_cursor = cursor;
+        iced::window::Id::unique()
     });
 
     let bounds = Rectangle {
@@ -677,6 +726,28 @@ struct TextContextMenuPopup<Message: Clone + 'static> {
     _phantom: std::marker::PhantomData<Message>,
 }
 
+impl<Message: Clone + 'static> TextContextMenuPopup<Message> {
+    fn is_current_popup(&self) -> bool {
+        self.menu
+            .tree
+            .inner
+            .with_data(|state| state.popup_id.values().any(|id| *id == self.menu.window_id))
+    }
+
+    /// A replaced native surface can still receive its final events. Only
+    /// the surface still registered by the text widget may reset that widget.
+    fn dismiss(&self) -> bool {
+        self.menu.tree.inner.with_data_mut(|state| {
+            if !state.popup_id.values().any(|id| *id == self.menu.window_id) {
+                return false;
+            }
+            state.popup_id.retain(|_, id| *id != self.menu.window_id);
+            state.reset();
+            true
+        })
+    }
+}
+
 impl<Message: Clone + 'static> iced_core::widget::Widget<Message, crate::Theme, crate::Renderer>
     for TextContextMenuPopup<Message>
 {
@@ -711,6 +782,9 @@ impl<Message: Clone + 'static> iced_core::widget::Widget<Message, crate::Theme, 
         renderer: &crate::Renderer,
         limits: &iced_core::layout::Limits,
     ) -> iced_core::layout::Node {
+        if !self.is_current_popup() {
+            return iced_core::layout::Node::new(limits.min());
+        }
         use iced_core::widget::Widget;
         Widget::<TextCtxAction, crate::Theme, crate::Renderer>::layout(
             &mut self.menu,
@@ -730,6 +804,9 @@ impl<Message: Clone + 'static> iced_core::widget::Widget<Message, crate::Theme, 
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
+        if !self.is_current_popup() {
+            return;
+        }
         use iced_core::widget::Widget;
         Widget::<TextCtxAction, crate::Theme, crate::Renderer>::draw(
             &self.menu, tree, renderer, theme, style, layout, cursor, viewport,
@@ -747,6 +824,9 @@ impl<Message: Clone + 'static> iced_core::widget::Widget<Message, crate::Theme, 
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
+        if !self.is_current_popup() {
+            return;
+        }
         #[cfg(wayland_platform)]
         {
             use iced_core::event::wayland::PopupEvent;
@@ -758,10 +838,7 @@ impl<Message: Clone + 'static> iced_core::widget::Widget<Message, crate::Theme, 
             };
             if matches!(popup_event, Some(PopupEvent::Done | PopupEvent::Unfocused)) {
                 let popup_id = self.menu.window_id;
-                self.menu.tree.inner.with_data_mut(|state| {
-                    state.popup_id.retain(|_, v| *v != popup_id);
-                    state.reset();
-                });
+                self.dismiss();
                 // `Done` means the surface was already destroyed by the
                 // compositor; only `Unfocused` needs an explicit destroy.
                 if matches!(popup_event, Some(PopupEvent::Unfocused)) {
@@ -782,10 +859,7 @@ impl<Message: Clone + 'static> iced_core::widget::Widget<Message, crate::Theme, 
             })
         ) {
             let popup_id = self.menu.window_id;
-            self.menu.tree.inner.with_data_mut(|state| {
-                state.popup_id.retain(|_, v| *v != popup_id);
-                state.reset();
-            });
+            self.dismiss();
             queue_destroy_popup(popup_id);
             shell.capture_event();
             return;
@@ -852,13 +926,8 @@ impl<Message: Clone + 'static> iced_core::widget::Widget<Message, crate::Theme, 
         #[cfg(wayland_platform)]
         {
             let menu_closed = self.menu.tree.inner.with_data(|state| !state.open);
-            if menu_closed {
-                let popup_id = self.menu.window_id;
-                self.menu.tree.inner.with_data_mut(|state| {
-                    state.popup_id.retain(|_, v| *v != popup_id);
-                    state.reset();
-                });
-                queue_destroy_popup(popup_id);
+            if menu_closed && self.dismiss() {
+                queue_destroy_popup(self.menu.window_id);
             }
         }
     }
@@ -871,6 +940,9 @@ impl<Message: Clone + 'static> iced_core::widget::Widget<Message, crate::Theme, 
         viewport: &Rectangle,
         renderer: &crate::Renderer,
     ) -> mouse::Interaction {
+        if !self.is_current_popup() {
+            return mouse::Interaction::default();
+        }
         use iced_core::widget::Widget;
         Widget::<TextCtxAction, crate::Theme, crate::Renderer>::mouse_interaction(
             &self.menu, tree, layout, cursor, viewport, renderer,
@@ -883,5 +955,252 @@ impl<Message: Clone + 'static> From<TextContextMenuPopup<Message>>
 {
     fn from(popup: TextContextMenuPopup<Message>) -> Self {
         Self::new(popup)
+    }
+}
+
+#[cfg(all(test, wayland_platform))]
+mod lifecycle_tests {
+    use super::*;
+    use crate::Core;
+    use crate::app::Application;
+    use crate::app::cosmic::Cosmic;
+    use iced::advanced::renderer::Headless;
+    use iced_futures::futures::{FutureExt, StreamExt};
+
+    struct WindowApp {
+        core: Core,
+    }
+    impl Application for WindowApp {
+        type Executor = crate::executor::Default;
+        type Flags = ();
+        type Message = ();
+        const APP_ID: &'static str = "dev.twright.PopupLifecycleTest";
+        fn core(&self) -> &Core {
+            &self.core
+        }
+        fn core_mut(&mut self) -> &mut Core {
+            &mut self.core
+        }
+        fn init(core: Core, _: ()) -> (Self, crate::app::Task<()>) {
+            (Self { core }, iced::Task::none())
+        }
+        fn view(&self) -> crate::Element<'_, ()> {
+            crate::widget::space::horizontal().into()
+        }
+    }
+
+    fn window(id: window::Id) -> Cosmic<WindowApp> {
+        let mut core = Core::default();
+        core.set_main_window_id(Some(id));
+        Cosmic::new(WindowApp { core })
+    }
+
+    fn renderer() -> crate::Renderer {
+        iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
+            iced::Font::default(),
+            iced::Pixels(14.0),
+            Some("tiny-skia"),
+        ))
+        .expect("a headless renderer")
+    }
+
+    fn queue(parent: window::Id, state: &MenuBarState, renderer: &crate::Renderer) -> window::Id {
+        let at = Point::new(20.0, 20.0);
+        create_text_context_popup(
+            at,
+            Some("Selected text".into()),
+            true,
+            true,
+            true,
+            true,
+            state,
+            &PendingAction::default(),
+            renderer,
+            &Rectangle::new(Point::ORIGIN, Size::new(400.0, 300.0)),
+            mouse::Cursor::Available(at),
+            parent,
+        );
+        state.inner.with_data(|inner| inner.popup_id[&parent])
+    }
+
+    #[test]
+    fn two_windows_keep_queued_text_popups_with_their_owner() {
+        let mut first = window(window::Id::unique());
+        let mut second = window(window::Id::unique());
+        let first_id = first.app.core.main_window_id().unwrap();
+        let second_id = second.app.core.main_window_id().unwrap();
+        let renderer = renderer();
+        let first_state = MenuBarState::default();
+        let second_state = MenuBarState::default();
+        let second_popup = queue(second_id, &second_state, &renderer);
+        let first_popup = queue(first_id, &first_state, &renderer);
+        drop(first.update(crate::Action::None));
+        assert!(first.surface_views.contains_key(&first_popup));
+        assert!(
+            !first.surface_views.contains_key(&second_popup),
+            "one live window must not steal the other's queued popup"
+        );
+        drop(second.update(crate::Action::None));
+        assert!(second.surface_views.contains_key(&second_popup));
+        queue_destroy_popup(second_popup);
+        drop(first.update(crate::Action::None));
+        assert!(
+            PENDING_POPUP_DESTROYS.with(|queue| queue.borrow().contains(&second_popup)),
+            "another window must not consume the owner's teardown"
+        );
+        drop(first);
+        assert!(second.surface_views.contains_key(&second_popup));
+        drop(second.update(crate::Action::None));
+        assert!(!PENDING_POPUP_DESTROYS.with(|queue| queue.borrow().contains(&second_popup)));
+    }
+
+    #[test]
+    fn dropping_a_window_discards_only_its_pending_popups() {
+        let first = window(window::Id::unique());
+        let mut second = window(window::Id::unique());
+        let first_id = first.app.core.main_window_id().unwrap();
+        let second_id = second.app.core.main_window_id().unwrap();
+        let renderer = renderer();
+        queue(first_id, &MenuBarState::default(), &renderer);
+        let second_popup = queue(second_id, &MenuBarState::default(), &renderer);
+        drop(first);
+        assert!(
+            !PENDING_POPUP_REQUESTS.with(|queue| queue
+                .borrow()
+                .iter()
+                .any(|req| req.settings.parent == first_id)),
+            "closed owner cannot leave a pending popup behind"
+        );
+        assert!(PENDING_POPUP_REQUESTS.with(|queue| {
+            queue
+                .borrow()
+                .iter()
+                .any(|req| req.settings.parent == second_id)
+        }));
+        drop(second.update(crate::Action::None));
+        assert!(second.surface_views.contains_key(&second_popup));
+    }
+
+    #[test]
+    fn reopening_a_text_popup_uses_a_fresh_surface_identity() {
+        let renderer = renderer();
+        let state = MenuBarState::default();
+        let parent = window::Id::unique();
+        let first = queue(parent, &state, &renderer);
+        let second = queue(parent, &state, &renderer);
+        assert_ne!(
+            first, second,
+            "late dismissal must distinguish the replaced popup from its successor"
+        );
+        assert!(state.inner.with_data(|inner| inner.open));
+        take_popup_requests(|_| true);
+        take_popup_destroys(|_| true);
+    }
+
+    #[test]
+    fn a_replaced_text_popup_cannot_dismiss_its_successor() {
+        use iced_core::widget::Widget;
+        let renderer = renderer();
+        let state = MenuBarState::default();
+        let parent = window::Id::unique();
+        let first_id = queue(parent, &state, &renderer);
+        let first = take_popup_requests(|id| id == parent).pop().unwrap();
+        let mut popup: TextContextMenuPopup<()> = TextContextMenuPopup {
+            menu: first.menu,
+            selected_text: first.selected_text,
+            pending_action: first.pending_action,
+            _phantom: std::marker::PhantomData,
+        };
+        let mut tree = Tree::new(&popup as &dyn Widget<(), crate::Theme, crate::Renderer>);
+        let limits = Limits::new(Size::ZERO, Size::new(400.0, 300.0));
+        let node = popup.layout(&mut tree, &renderer, &limits);
+        let second_id = queue(parent, &state, &renderer);
+        assert_ne!(first_id, second_id);
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        popup.update(
+            &mut tree,
+            &event::Event::Keyboard(iced_core::keyboard::Event::KeyPressed {
+                key: iced_core::keyboard::Key::Named(iced_core::keyboard::key::Named::Escape),
+                modified_key: iced_core::keyboard::Key::Named(
+                    iced_core::keyboard::key::Named::Escape,
+                ),
+                physical_key: iced_core::keyboard::key::Physical::Code(
+                    iced_core::keyboard::key::Code::Escape,
+                ),
+                location: iced_core::keyboard::Location::Standard,
+                modifiers: iced_core::keyboard::Modifiers::empty(),
+                text: None,
+                repeat: false,
+            }),
+            Layout::new(&node),
+            mouse::Cursor::Unavailable,
+            &renderer,
+            &mut iced_core::clipboard::Null,
+            &mut shell,
+            &Rectangle::new(Point::ORIGIN, limits.max()),
+        );
+        assert!(
+            state
+                .inner
+                .with_data(|inner| inner.open && inner.popup_id.get(&parent) == Some(&second_id)),
+            "a late event on the replaced surface must preserve its successor"
+        );
+        assert_eq!(
+            popup.layout(&mut tree, &renderer, &limits).size(),
+            Size::ZERO,
+            "a replaced popup must not lay out its successor's shared tree"
+        );
+        take_popup_requests(|_| true);
+        take_popup_destroys(|_| true);
+    }
+
+    #[test]
+    fn popup_wakes_survive_either_of_two_window_subscriptions_closing() {
+        type WakeStream =
+            iced_futures::futures::stream::BoxStream<'static, (window::Id, crate::Action<()>)>;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let receive = |stream: &mut WakeStream| {
+            runtime.block_on(async {
+                tokio::time::timeout(std::time::Duration::from_millis(100), stream.next())
+                    .await
+                    .expect("a live window's subscription must be woken")
+                    .expect("a live window's subscription must remain open")
+            })
+        };
+        for close_first in [true, false] {
+            let stream = |id| {
+                let mut recipes =
+                    iced_futures::subscription::into_recipes(wake_subscription::<()>().with(id));
+                recipes
+                    .pop()
+                    .unwrap()
+                    .stream(Box::pin(iced_futures::futures::stream::pending()))
+            };
+            let first_id = window::Id::unique();
+            let second_id = window::Id::unique();
+            let mut first = stream(first_id);
+            let mut second = stream(second_id);
+            assert!(first.next().now_or_never().is_none());
+            assert!(
+                second.next().now_or_never().is_none(),
+                "second window must keep its wake subscription alive"
+            );
+            wake_runtime();
+            assert!(matches!(receive(&mut first), (id, crate::Action::None) if id == first_id));
+            assert!(matches!(receive(&mut second), (id, crate::Action::None) if id == second_id));
+            let (mut surviving, expected) = if close_first {
+                drop(first);
+                (second, second_id)
+            } else {
+                drop(second);
+                (first, first_id)
+            };
+            wake_runtime();
+            assert!(matches!(receive(&mut surviving), (id, crate::Action::None) if id == expected));
+        }
     }
 }

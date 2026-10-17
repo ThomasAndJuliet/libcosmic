@@ -355,6 +355,13 @@ where
     /// Grants access to the COSMIC Core.
     fn core_mut(&mut self) -> &mut Core;
 
+    /// Whether a native window belongs to this application instance.
+    /// Override this when opening additional windows outside Cosmic's surface
+    /// helpers so deferred widget popups stay with their owning instance.
+    fn owns_window(&self, id: window::Id) -> bool {
+        self.core().main_window_id() == Some(id)
+    }
+
     /// Creates the application, and optionally emits task on initialize.
     fn init(core: Core, flags: Self::Flags) -> (Self, Task<Self::Message>);
 
