@@ -151,6 +151,45 @@ where
         self.app.title(id).to_string()
     }
 
+    /// Close the native surfaces registered by this application instance.
+    ///
+    /// Owners being removed from a multi-window host must request native
+    /// teardown as well as dropping their view closures. Request descendant
+    /// teardown first, including nested popup stacks, before their parents.
+    #[cfg(feature = "winit")]
+    pub fn close_owned_surfaces(&self) -> iced::Task<crate::Action<T::Message>> {
+        let mut surfaces: Vec<_> = self.surface_views.iter().map(|(id, (parent, kind, ..))| {
+            let mut depth = 0;
+            let mut ancestor = *parent;
+            while let Some((parent, ..)) = ancestor.and_then(|id| self.surface_views.get(&id)) {
+                depth += 1;
+                // A malformed parent cycle is a programming error, but it
+                // must not make a shutdown traversal loop indefinitely.
+                if depth == self.surface_views.len() { break; }
+                ancestor = *parent;
+            }
+            (std::cmp::Reverse(depth), *id, *kind)
+        }).collect();
+        surfaces.sort_by_key(|(depth, id, _)| (*depth, *id));
+        surfaces.into_iter().fold(Task::none(), |task, (_, _, kind)| {
+            let close = match kind {
+                SurfaceIdWrapper::Window(id) => iced::window::close(id),
+                #[cfg(wayland_platform)]
+                SurfaceIdWrapper::Popup(id) => iced_winit::commands::popup::destroy_popup(id),
+                #[cfg(wayland_platform)]
+                SurfaceIdWrapper::Subsurface(id) => iced_winit::commands::subsurface::destroy_subsurface(id),
+                #[cfg(wayland_platform)]
+                SurfaceIdWrapper::LayerSurface(id) => iced_winit::commands::layer_surface::destroy_layer_surface(id),
+                #[cfg(wayland_platform)]
+                SurfaceIdWrapper::SessionLock(id) => iced_winit::commands::session_lock::destroy_lock_surface(id),
+                #[cfg(not(wayland_platform))]
+                _ => Task::none(),
+            };
+            // Batch would allow a parent destroy to overtake its popup.
+            task.chain(close)
+        })
+    }
+
     #[allow(clippy::too_many_lines)]
     pub fn surface_update(
         &mut self,
