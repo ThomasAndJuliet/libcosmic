@@ -463,6 +463,9 @@ impl<'b, Message: Clone + 'static> Menu<'b, Message> {
     }
 
     pub(crate) fn layout(&self, renderer: &crate::Renderer, limits: Limits) -> Node {
+        if !self.tree.is_current() {
+            return Node::new(limits.min());
+        }
         // layout children;
         let position = self.position;
         let mut intrinsic_size = Size::ZERO;
@@ -597,6 +600,9 @@ impl<'b, Message: Clone + 'static> Menu<'b, Message> {
         clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
     ) -> Option<(usize, MenuState)> {
+        if !self.tree.is_current() {
+            return None;
+        }
         use event::Event::{Mouse, Touch};
         use event::Status::{Captured, Ignored};
         use mouse::Button::Left;
@@ -771,6 +777,9 @@ impl<'b, Message: Clone + 'static> Menu<'b, Message> {
         layout: Layout<'_>,
         view_cursor: Cursor,
     ) {
+        if !self.tree.is_current() {
+            return;
+        }
         self.tree.inner.with_data(|state| {
             if !state.open || state.active_root.len() <= self.depth {
                 return;
@@ -1031,6 +1040,7 @@ impl<Message: std::clone::Clone + 'static> Widget<Message, crate::Theme, crate::
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
+        self.tree.close_outdated_popups(self.on_surface_action.as_ref(), shell);
         let new_root = self.update(event, layout, cursor, renderer, clipboard, shell);
 
         #[cfg(wayland_platform)]

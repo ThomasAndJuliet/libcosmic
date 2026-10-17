@@ -40,10 +40,40 @@ where
 #[derive(Clone, Default)]
 pub(crate) struct MenuBarState {
     pub(crate) inner: RcWrapper<MenuBarStateInner>,
+    // Cloned popups retain the model generation they were constructed for.
+    model: Option<Arc<MenuShape>>,
+}
+
+type MenuShape = Vec<Vec<(tree::Tag, usize)>>;
+
+impl MenuBarState {
+    pub(super) fn is_current(&self) -> bool {
+        self.inner.with_data(|inner| match (&self.model, &inner.model) {
+            (Some(own), Some(current)) => Arc::ptr_eq(own, current),
+            (None, None) => true,
+            _ => false,
+        })
+    }
+
+    pub(super) fn close_outdated_popups<Message>(
+        &self,
+        handler: Option<&Arc<dyn Fn(crate::surface::Action<Message>) -> Message + Send + Sync + 'static>>,
+        shell: &mut Shell<'_, Message>,
+    ) {
+        if let Some(handler) = handler {
+            self.inner.with_data_mut(|inner| {
+                for id in inner.outdated_popups.drain(..) {
+                    shell.publish(handler(crate::surface::Action::DestroyPopup(id)));
+                }
+            });
+        }
+    }
 }
 
 pub(crate) struct MenuBarStateInner {
     pub(crate) tree: Tree,
+    model: Option<Arc<MenuShape>>,
+    outdated_popups: Vec<window::Id>,
     pub(crate) popup_id: HashMap<window::Id, window::Id>,
     pub(crate) pressed: bool,
     pub(crate) bar_pressed: bool,
@@ -75,6 +105,8 @@ impl Default for MenuBarStateInner {
     fn default() -> Self {
         Self {
             tree: Tree::empty(),
+            model: None,
+            outdated_popups: Vec::new(),
             pressed: false,
             view_cursor: Cursor::Available([-0.5, -0.5].into()),
             open: false,
@@ -517,12 +549,27 @@ where
     }
 
     fn diff(&mut self, tree: &mut Tree) {
-        // The bar's own roots are laid out, drawn and updated from `tree.children`
-        menu_roots_diff(&mut self.menu_roots, tree);
         let state = tree.state.downcast_mut::<MenuBarState>();
-        state
-            .inner
-            .with_data_mut(|inner| menu_roots_diff(&mut self.menu_roots, &mut inner.tree));
+        let shape: MenuShape = self.menu_roots.iter().map(|root| {
+            root.flattern().iter().map(|node| (node.item.tag(), node.children.len())).collect()
+        }).collect();
+        state.inner.with_data_mut(|inner| {
+            if inner.model.as_deref() != Some(&shape) {
+                // An existing native popup still owns the old menu model.
+                // Invalidate it before replacing the shared widget tree, and
+                // retain its IDs until an event can request their destruction.
+                if inner.model.is_some() {
+                    inner.reset();
+                    inner.outdated_popups.extend(inner.popup_id.drain().map(|(_, id)| id));
+                }
+                inner.model = Some(Arc::new(shape));
+            }
+            menu_roots_diff(&mut self.menu_roots, &mut inner.tree);
+        });
+        state.model = state.inner.with_data(|inner| inner.model.clone());
+        // Root widgets have their own state tree, separate from the popup's
+        // flattened items. Reconcile both when roots are added or removed.
+        menu_roots_diff(&mut self.menu_roots, tree);
     }
 
     fn tag(&self) -> tree::Tag {
@@ -581,6 +628,9 @@ where
         use mouse::Event::ButtonReleased;
         use touch::Event::{FingerLifted, FingerLost};
 
+        tree.state.downcast_ref::<MenuBarState>().close_outdated_popups(
+            self.on_surface_action.as_ref(), shell,
+        );
         process_root_events(
             &mut self.menu_roots,
             view_cursor,
@@ -1205,5 +1255,114 @@ mod tests {
         assert!(popup(&messages) && destroyed(&messages));
         let (messages, _) = click(&mut ui, &mut renderer, FILE, mouse::Button::Left);
         assert!(popup(&messages), "the menu was closed");
+    }
+}
+
+#[cfg(all(test, wayland_platform))]
+mod popup_state_tests {
+    use super::*;
+    use iced::advanced::renderer::Headless;
+    use std::borrow::Cow;
+
+    fn root(label: &'static str) -> MenuTree<()> {
+        MenuTree::with_children(
+            crate::Element::from(crate::widget::text(label)),
+            vec![MenuTree::new(crate::Element::from(crate::widget::text("Action")))],
+        )
+    }
+
+    #[test]
+    fn an_open_menu_survives_its_roots_being_replaced() {
+        let renderer = iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
+            iced::Font::default(), iced::Pixels(14.0), Some("tiny-skia"),
+        )).expect("a headless renderer");
+        let mut bar = MenuBar::new(vec![root("File"), root("View")]);
+        let mut tree = Tree::new(&bar as &dyn Widget<(), crate::Theme, Renderer>);
+        bar.diff(&mut tree);
+        let state = tree.state.downcast_ref::<MenuBarState>().clone();
+        state.inner.with_data_mut(|inner| inner.open = true);
+        let mut popup = Menu {
+            tree: state.clone(), menu_roots: bar.menu_roots.clone(),
+            bounds_expand: 16, menu_overlays_parent: false,
+            close_condition: bar.close_condition, item_width: bar.item_width,
+            item_height: bar.item_height, bar_bounds: Rectangle::new(Point::ORIGIN, iced::Size::new(200.0, 32.0)),
+            main_offset: 0, cross_offset: 0,
+            root_bounds_list: vec![
+                Rectangle::new(Point::ORIGIN, iced::Size::new(100.0, 32.0)),
+                Rectangle::new(Point::new(100.0, 0.0), iced::Size::new(100.0, 32.0)),
+            ],
+            path_highlight: None, style: Cow::Owned(bar.style.clone()),
+            position: Point::ORIGIN, is_overlay: false, window_id: window::Id::unique(),
+            depth: 0, on_surface_action: None,
+        };
+        let parent = window::Id::unique();
+        let old_popup_id = popup.window_id;
+        state.inner.with_data_mut(|inner| { inner.popup_id.insert(parent, old_popup_id); });
+        let mut messages = Vec::new();
+        init_root_menu(
+            &mut popup, &renderer, &mut Shell::new(&mut messages), Point::new(150.0, 16.0),
+            iced::Size::new(400.0, 300.0), Vector::ZERO,
+            Rectangle::new(Point::ORIGIN, iced::Size::new(200.0, 32.0)), 0.0,
+        );
+        assert_eq!(state.inner.with_data(|inner| inner.active_root.clone()), vec![1]);
+        let limits = Limits::new(iced::Size::ZERO, iced::Size::new(400.0, 300.0));
+        let _ = popup.layout(&renderer, limits);
+
+        // Responsive collapse and a changed menu model can both replace the
+        // roots while an existing native popup still owns the old model.
+        let mut replacement = MenuBar::new(vec![root("Menu")]);
+        replacement.diff(&mut tree);
+        let _ = popup.layout(&renderer, limits);
+        assert!(!state.inner.with_data(|inner| inner.open));
+
+        // A new menu can open before the old native surface's final frame
+        // and dismissal arrive. Its state must not revive the stale model.
+        let mut reopened = popup.clone();
+        reopened.tree = tree.state.downcast_ref::<MenuBarState>().clone();
+        reopened.menu_roots = replacement.menu_roots.clone();
+        reopened.root_bounds_list.truncate(1);
+        reopened.window_id = window::Id::unique();
+        state.inner.with_data_mut(|inner| {
+            inner.open = true;
+            inner.popup_id.insert(parent, reopened.window_id);
+        });
+        init_root_menu(
+            &mut reopened, &renderer, &mut Shell::new(&mut messages), Point::new(50.0, 16.0),
+            iced::Size::new(400.0, 300.0), Vector::ZERO,
+            Rectangle::new(Point::ORIGIN, iced::Size::new(100.0, 32.0)), 0.0,
+        );
+        assert!(reopened.layout(&renderer, limits).size().width > 0.0);
+        assert_eq!(popup.layout(&renderer, limits).size(), iced::Size::ZERO);
+        assert!(state.inner.with_data(|inner| inner.open));
+
+        let closed = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = closed.clone();
+        let handler: Arc<dyn Fn(crate::surface::Action<()>) + Send + Sync> = Arc::new(move |action| {
+            if let crate::surface::Action::DestroyPopup(id) = action {
+                captured.lock().unwrap().push(id);
+            }
+        });
+        state.close_outdated_popups(Some(&handler), &mut Shell::new(&mut messages));
+        state.close_outdated_popups(Some(&handler), &mut Shell::new(&mut messages));
+        assert_eq!(*closed.lock().unwrap(), vec![old_popup_id], "close only the outdated native popup, once");
+        assert_eq!(state.inner.with_data(|inner| inner.popup_id.get(&parent).copied()), Some(reopened.window_id));
+        assert!(state.inner.with_data(|inner| inner.open));
+    }
+
+    #[test]
+    fn relabeling_a_menu_preserves_its_open_popup() {
+        let mut bar = MenuBar::new(vec![root("File"), root("View")]);
+        let mut tree = Tree::new(&bar as &dyn Widget<(), crate::Theme, Renderer>);
+        bar.diff(&mut tree);
+        let popup_state = tree.state.downcast_ref::<MenuBarState>().clone();
+        popup_state.inner.with_data_mut(|inner| {
+            inner.open = true;
+            inner.active_root = vec![1];
+        });
+        let mut renamed = MenuBar::new(vec![root("Fichier"), root("Affichage")]);
+        renamed.diff(&mut tree);
+        assert!(popup_state.is_current(), "text changes do not invalidate measured menu slots");
+        assert!(popup_state.inner.with_data(|inner| inner.open));
+        assert_eq!(popup_state.inner.with_data(|inner| inner.active_root.clone()), vec![1]);
     }
 }
