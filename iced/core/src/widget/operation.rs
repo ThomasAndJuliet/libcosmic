@@ -156,6 +156,128 @@ where
     }
 }
 
+/// Restricts every pass of an operation to one native window. The runtime
+/// supplies each window id with [`Operation::set_window_id`] before traversal.
+/// Queries and chained operations retain the same window boundary.
+pub fn in_window<T: 'static>(
+    target: window::Id,
+    operation: impl Operation<T> + 'static,
+) -> impl Operation<T> {
+    struct InWindow<O> {
+        target: window::Id,
+        current: Option<window::Id>,
+        operation: O,
+    }
+
+    impl<O> InWindow<O> {
+        fn matches(&self) -> bool {
+            self.current == Some(self.target)
+        }
+    }
+
+    impl<T: 'static, O: Operation<T> + 'static> Operation<T> for InWindow<O> {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<T>)) {
+            if self.matches() {
+                self.operation.traverse(operate);
+            }
+        }
+
+        fn container(&mut self, id: Option<&Id>, bounds: Rectangle) {
+            if self.matches() {
+                self.operation.container(id, bounds);
+            }
+        }
+
+        fn focusable(
+            &mut self,
+            id: Option<&Id>,
+            bounds: Rectangle,
+            state: &mut dyn Focusable,
+        ) {
+            if self.matches() {
+                self.operation.focusable(id, bounds, state);
+            }
+        }
+
+        fn scrollable(
+            &mut self,
+            id: Option<&Id>,
+            bounds: Rectangle,
+            content: Rectangle,
+            translation: Vector,
+            state: &mut dyn Scrollable,
+        ) {
+            if self.matches() {
+                self.operation.scrollable(
+                    id,
+                    bounds,
+                    content,
+                    translation,
+                    state,
+                );
+            }
+        }
+
+        fn text_input(
+            &mut self,
+            id: Option<&Id>,
+            bounds: Rectangle,
+            state: &mut dyn TextInput,
+        ) {
+            if self.matches() {
+                self.operation.text_input(id, bounds, state);
+            }
+        }
+
+        fn text(&mut self, id: Option<&Id>, bounds: Rectangle, text: &str) {
+            if self.matches() {
+                self.operation.text(id, bounds, text);
+            }
+        }
+
+        fn custom(
+            &mut self,
+            id: Option<&Id>,
+            bounds: Rectangle,
+            state: &mut dyn Any,
+        ) {
+            if self.matches() {
+                self.operation.custom(id, bounds, state);
+            }
+        }
+
+        fn pre_operation(&mut self, id: Option<&Id>) {
+            if self.matches() {
+                self.operation.pre_operation(id);
+            }
+        }
+
+        fn set_window_id(&mut self, id: window::Id) {
+            self.current = Some(id);
+            if self.matches() {
+                self.operation.set_window_id(id);
+            }
+        }
+
+        fn finish(&self) -> Outcome<T> {
+            match self.operation.finish() {
+                Outcome::Chain(next) => Outcome::Chain(Box::new(InWindow {
+                    target: self.target,
+                    current: None,
+                    operation: next,
+                })),
+                outcome => outcome,
+            }
+        }
+    }
+
+    InWindow {
+        target,
+        current: None,
+        operation,
+    }
+}
+
 /// The result of an [`Operation`].
 pub enum Outcome<T> {
     /// The [`Operation`] produced no result.

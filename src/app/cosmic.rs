@@ -872,11 +872,18 @@ impl<T: Application> Cosmic<T> {
             }
 
             Action::KeyboardNav(message) => match message {
-                keyboard_nav::Action::FocusNext => {
-                    return iced::widget::operation::focus_next().map(crate::Action::Cosmic);
-                }
-                keyboard_nav::Action::FocusPrevious => {
-                    return iced::widget::operation::focus_previous().map(crate::Action::Cosmic);
+                keyboard_nav::Action::FocusNext | keyboard_nav::Action::FocusPrevious => {
+                    use iced_core::widget::operation::{self, focusable};
+                    let operation: Box<dyn operation::Operation> = if message == keyboard_nav::Action::FocusNext {
+                        Box::new(focusable::focus_next())
+                    } else {
+                        Box::new(focusable::focus_previous())
+                    };
+                    return if let Some(window) = self.app.core().focused_window() {
+                        iced_runtime::task::effect(iced_runtime::Action::widget(operation::in_window(window, operation)))
+                    } else {
+                        iced_runtime::task::effect(iced_runtime::Action::widget(operation))
+                    };
                 }
                 keyboard_nav::Action::Escape => return self.app.on_escape(),
                 keyboard_nav::Action::Search => return self.app.on_search(),

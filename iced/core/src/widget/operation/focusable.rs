@@ -27,9 +27,68 @@ pub struct Count {
 }
 
 /// Produces an [`Operation`] that focuses the widget with the given [`Id`].
+/// Native windows keep independent focus: siblings are unfocused only in
+/// windows containing the target. A target that has closed changes no window.
 pub fn focus<T>(target: Id) -> impl Operation<T> {
+    struct Locate {
+        target: Id,
+        current_window: Option<crate::window::Id>,
+        target_windows: Vec<crate::window::Id>,
+    }
+
     struct Focus {
         target: Id,
+        current_window: Option<crate::window::Id>,
+        target_windows: Vec<crate::window::Id>,
+    }
+
+    fn apply(target: &Id, id: Option<&Id>, state: &mut dyn Focusable) {
+        if id.is_some_and(|id| IdEq::eq(&id.0, &target.0)) {
+            state.focus();
+        } else {
+            state.unfocus();
+        }
+    }
+
+    impl<T> Operation<T> for Locate {
+        fn focusable(
+            &mut self,
+            id: Option<&Id>,
+            _bounds: Rectangle,
+            state: &mut dyn Focusable,
+        ) {
+            let Some(window) = self.current_window else {
+                // Direct widget-tree callers operate on a single tree and
+                // do not run a native window traversal or chained pass.
+                apply(&self.target, id, state);
+                return;
+            };
+            if id.is_some_and(|id| IdEq::eq(&id.0, &self.target.0))
+                && !self.target_windows.contains(&window)
+            {
+                self.target_windows.push(window);
+            }
+        }
+
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<T>)) {
+            operate(self);
+        }
+
+        fn set_window_id(&mut self, id: crate::window::Id) {
+            self.current_window = Some(id);
+        }
+
+        fn finish(&self) -> Outcome<T> {
+            if self.target_windows.is_empty() {
+                Outcome::None
+            } else {
+                Outcome::Chain(Box::new(Focus {
+                    target: self.target.clone(),
+                    current_window: None,
+                    target_windows: self.target_windows.clone(),
+                }))
+            }
+        }
     }
 
     impl<T> Operation<T> for Focus {
@@ -39,22 +98,33 @@ pub fn focus<T>(target: Id) -> impl Operation<T> {
             _bounds: Rectangle,
             state: &mut dyn Focusable,
         ) {
-            match id {
-                Some(id) if IdEq::eq(&id.0, &self.target.0) => {
-                    state.focus();
-                }
-                _ => {
-                    state.unfocus();
-                }
+            if self
+                .current_window
+                .is_some_and(|window| self.target_windows.contains(&window))
+            {
+                apply(&self.target, id, state);
             }
         }
 
         fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<T>)) {
-            operate(self);
+            if self
+                .current_window
+                .is_some_and(|window| self.target_windows.contains(&window))
+            {
+                operate(self);
+            }
+        }
+
+        fn set_window_id(&mut self, id: crate::window::Id) {
+            self.current_window = Some(id);
         }
     }
 
-    Focus { target }
+    Locate {
+        target,
+        current_window: None,
+        target_windows: Vec::new(),
+    }
 }
 
 /// Produces an [`Operation`] that unfocuses the focused widget.
