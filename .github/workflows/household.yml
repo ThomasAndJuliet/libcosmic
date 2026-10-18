@@ -1,0 +1,66 @@
+name: Household fork
+
+# The fork's own tests, on neo only. Upstream's workflows are removed: they
+# would run on GitHub-hosted runners, which this private repository does not
+# use. Only Tom's and Juliet's pushes to this repository run; anything else
+# skips rather than fall back to a hosted runner.
+
+on:
+  push:
+    branches: [household, 'fork/**']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The feature set the home-apps build libcosmic with
+  APP_FEATURES: about,autosize,multi-window,tokio,winit,surface-message,wayland,wgpu,dbus-config
+
+jobs:
+  test:
+    name: Tests
+    if: ${{ github.repository_id == '1422416409' && (github.triggering_actor == 'twright' || github.triggering_actor == 'jcooke848') }}
+    runs-on: [self-hosted, neo-ubuntu]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbcommon-dev libfontconfig1-dev libfreetype6-dev libglvnd-dev libinput-dev libvulkan-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libasound2-dev libdbus-1-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: libcosmic
+        run: cargo test --lib
+
+      - name: libcosmic with the apps' features
+        run: cargo check --lib --no-default-features --features "$APP_FEATURES"
+
+      # Moved here from cosmic-term's CI with the fork (they ran against its
+      # vendored copy)
+      - name: Native popup lifecycle and menu model changes
+        run: |
+          cargo test --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib lifecycle_tests -- --test-threads=1
+          cargo test --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib popup_state_tests -- --test-threads=1
+
+      - name: cosmic-theme
+        run: cargo test -p cosmic-theme
+
+      - name: iced renderers
+        working-directory: iced
+        run: |
+          cargo test --locked -p iced_wgpu --lib failure_tests
+          cargo test --locked -p iced_tiny_skia --lib failure_tests
+          cargo test --locked -p iced_tiny_skia --features svg --lib
+
+      - name: winit's Wayland backend
+        working-directory: winit
+        run: cargo check -p winit-wayland

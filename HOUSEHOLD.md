@@ -112,6 +112,19 @@ Changes Tom's cosmic-term sessions made to its vendored copy. Each commit has an
 - **popover:** `Position::BelowAtWindow`.
 - **text_context_menu:** a second right-click replaces the popup, and a replaced surface no longer resets the widget.
 
+## CI
+
+`.github/workflows/household.yml` runs on neo's `neo-ubuntu` runner for pushes to `household` and `fork/**` by Tom or Juliet; nothing runs on GitHub-hosted runners. Upstream's workflows are removed. It runs:
+
+- libcosmic's library tests;
+- a check with the apps' feature set;
+- the popup lifecycle and menu-model tests that used to run in cosmic-term's CI;
+- cosmic-theme's tests;
+- iced's renderer failure tests and SVG tests;
+- a check of winit's Wayland backend.
+
+Push a `fork/<topic>` branch to get a run before merging it into `household`.
+
 ## Rebasing onto upstream
 
 1. Fetch upstream libcosmic, and rebase `household` onto the new upstream commit, dropping the subtree commits.
