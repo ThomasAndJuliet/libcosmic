@@ -94,6 +94,24 @@ Each commit carries the number of the household-ui proposal it answers, or an `I
   - `Core::scale_factor_of(window::Id)` (#35).
 - **iced_winit:** SCTK input-method events are forwarded according to the surface, not the `single-instance` feature (#29).
 
+### From cosmic-term, 17 October
+
+Changes Tom's cosmic-term sessions made to its vendored copy. Each commit has an `Origin: cosmic-term <sha>` line.
+
+- **iced:**
+  - graphics and window failures are reported, not panics: `Compositor` methods return a `Result`, `window::Event::RenderingFailed` closes only the affected window, and `window::try_open` and `window::try_screenshot` report failures. **Note:** this changes the `Compositor` trait and the channels of `window::Action::Open` and `Screenshot`;
+  - iced_winit survives a cancelled runtime and missing Wayland handles during shutdown;
+  - `operation::in_window`, and `focus(id)` changes focus only in the target's window.
+- **app:**
+  - keyboard navigation stays in the focused window;
+  - `Application::owns_window`: an instance drains only its own deferred text popups;
+  - `Cosmic::close_owned_surfaces` closes an instance's surfaces, children first.
+- **menus:**
+  - `Menu::menu_roots` is a `Vec`; every menu owns its roots;
+  - a menu bar closes native popups built for an older model when its roots change shape.
+- **popover:** `Position::BelowAtWindow`.
+- **text_context_menu:** a second right-click replaces the popup, and a replaced surface no longer resets the widget.
+
 ## Rebasing onto upstream
 
 1. Fetch upstream libcosmic, and rebase `household` onto the new upstream commit, dropping the subtree commits.
