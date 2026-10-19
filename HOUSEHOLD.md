@@ -75,6 +75,10 @@ Each commit says where it came from, using an `Origin:` line or a household-ui p
   one is an ordinary entry. It goes through `menu::items`, so the expanded
   and the collapsed `responsive_menu_bar` both draw it. `CheckBox` and
   `Entry::checked` are unchanged (T-076, Juliet 14 Oct).
+  `Entry::mark(handle)` draws a 16 px icon in the check column in place of
+  the tick, in the row's icon colour (the accent text colour on a selected
+  row): a radio mark for one choice of several (Juliet, 19 Oct: "we also
+  need a radio box like icon").
 - **theme:** hidden `set_active`, for headless rendering in tests.
 - **iced wgpu:** rasterised SVGs are un-premultiplied before upload.
 - **iced scrollable:**

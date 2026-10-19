@@ -216,6 +216,8 @@ pub struct Entry<A, L> {
     icon: IconSlot,
     /// `Some` draws the check column
     checked: Option<bool>,
+    /// Drawn in the check column in place of the tick, see [`Entry::mark`]
+    mark: Option<icon::Handle>,
     /// Drawn as the chosen one of several, see [`Entry::selected`]
     selected: bool,
     enabled: bool,
@@ -228,6 +230,7 @@ impl<A, L> Entry<A, L> {
             label,
             icon: IconSlot::None,
             checked: None,
+            mark: None,
             selected: false,
             enabled: true,
             action,
@@ -255,7 +258,17 @@ impl<A, L> Entry<A, L> {
         self
     }
 
-    /// Draw the entry as one choice of several, with no check column: when
+    /// Draw `mark` in the check column, 16 px, in place of the tick: a
+    /// radio mark for one choice of several, say. It takes the row's icon
+    /// colour, which is the accent text colour on a [`Entry::selected`] row
+    #[must_use]
+    pub fn mark(mut self, mark: icon::Handle) -> Self {
+        self.mark = Some(mark);
+        self
+    }
+
+    /// Draw the entry as one choice of several, with no tick (a
+    /// [`Entry::mark`] may stand in the check column instead): when
     /// `selected` is true the row is filled with the theme's selected
     /// colour and its label and icon drawn in the selected text colour,
     /// semibold, as a dropdown draws its chosen option; when false it is
@@ -306,6 +319,7 @@ fn entry_tree<
         label,
         icon,
         checked,
+        mark,
         selected,
         enabled,
         action,
@@ -331,7 +345,15 @@ fn entry_tree<
 
     let mut items: Vec<crate::Element<'static, Message>> = Vec::with_capacity(7);
 
-    if let Some(checked) = checked {
+    if let Some(mark) = mark {
+        items.push(
+            widget::icon::icon(mark)
+                .size(16)
+                .width(Length::Fixed(16.0))
+                .into(),
+        );
+        items.push(widget::space::horizontal().width(spacing.space_xxs).into());
+    } else if let Some(checked) = checked {
         items.push(if checked {
             widget::icon::from_name("object-select-symbolic")
                 .size(16)
