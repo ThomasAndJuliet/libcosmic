@@ -1220,8 +1220,9 @@ impl ThemeBuilder {
             control_steps_array[0]
         };
         component_hovered_overlay.alpha = 0.1;
-        // The background's own overlays, from its own index: the primary and
-        // secondary blocks below reassign `component_hovered_overlay`.
+        // The background's own overlays, from its own index, for the opaque
+        // and the transparent background: the primary and secondary blocks
+        // below reassign `component_hovered_overlay`.
         let background_hovered_overlay = component_hovered_overlay;
         let mut background_pressed_overlay = component_hovered_overlay;
         background_pressed_overlay.alpha = 0.2;
@@ -1632,8 +1633,8 @@ impl ThemeBuilder {
                     transparent_bg_component,
                     accent,
                     on_transparent_bg_component,
-                    component_hovered_overlay,
-                    component_pressed_overlay,
+                    background_hovered_overlay,
+                    background_pressed_overlay,
                     is_high_contrast,
                     control_steps_array[8],
                 ),
@@ -1980,7 +1981,9 @@ mod tests {
     }
 
     /// The background layer's hover and selected take its own overlay, not
-    /// the one the primary block leaves behind (cosmic-epoch#3668)
+    /// the one the primary block leaves behind (cosmic-epoch#3668); the
+    /// transparent background's hover, selected and pressed too, not the
+    /// secondary block's
     #[test]
     fn the_background_hover_is_its_own() {
         let luma = |c: Srgba| c.relative_luminance().luma;
@@ -1997,5 +2000,21 @@ mod tests {
         assert_eq!(hex(dark.base), [0x2e, 0x2e, 0x2e, 0xff]);
         assert_eq!(hex(dark.hover), [0x43, 0x43, 0x43, 0xff]);
         assert_eq!(hex(dark.selected), [0x43, 0x43, 0x43, 0xff]);
+
+        // The transparent background's base is translucent, so its hover is
+        // a little darker than the base even under a white overlay: pin the
+        // values (with the secondary's white overlay, light hover was
+        // #efefef and pressed #ebebeb)
+        let light = Theme::light_default().transparent_background.component;
+        assert_eq!(hex(light.base), [0xf5, 0xf5, 0xf5, 0xc2]);
+        assert_eq!(hex(light.hover), [0xd6, 0xd6, 0xd6, 0xc8]);
+        assert_eq!(hex(light.selected), [0xd6, 0xd6, 0xd6, 0xc8]);
+        assert_eq!(hex(light.pressed), [0xb8, 0xb8, 0xb8, 0xce]);
+
+        let dark = Theme::dark_default().transparent_background.component;
+        assert_eq!(hex(dark.base), [0x2e, 0x2e, 0x2e, 0xc2]);
+        assert_eq!(hex(dark.hover), [0x42, 0x42, 0x42, 0xc8]);
+        assert_eq!(hex(dark.selected), [0x42, 0x42, 0x42, 0xc8]);
+        assert_eq!(hex(dark.pressed), [0x56, 0x56, 0x56, 0xce]);
     }
 }
