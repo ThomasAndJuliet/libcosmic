@@ -64,6 +64,10 @@ Each commit says where it came from, using an `Origin:` line or a household-ui p
   - the tab-drag candidate is forgotten on click;
   - a `handle_event` refactor;
   - `tab_drag_data`, `on_tab_drag_start` and `on_tab_hover`.
+  - an optional title colour per item, `Model::text_color` and
+    `Model::text_color_set`: the title is drawn in it in every state, in place
+    of the state's text colour; the icon, the close button and the drop marker
+    keep the state's colour (household-ui proposal #39).
 - **theme:** hidden `set_active`, for headless rendering in tests.
 - **iced wgpu:** rasterised SVGs are un-premultiplied before upload.
 - **iced scrollable:**

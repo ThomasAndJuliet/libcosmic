@@ -71,6 +71,9 @@ pub struct Model<SelectionMode: Default> {
     /// Text optionally-defined for each item.
     pub(super) text: SecondaryMap<Entity, Cow<'static, str>>,
 
+    /// Title colour optionally-defined for each item (household fork).
+    pub(super) text_colors: SecondaryMap<Entity, iced::Color>,
+
     /// Order which the items will be displayed.
     pub(super) order: VecDeque<Entity>,
 
@@ -358,6 +361,34 @@ where
         self.indents.remove(id)
     }
 
+    /// The colour the item's title is drawn in, if the item has one of its own.
+    ///
+    /// Without one, the title takes the text colour of the item's state
+    /// (active, inactive, hovered). Only the title uses it: the icon, the close
+    /// button and the drop marker keep the state's colour. (Household fork.)
+    #[inline]
+    pub fn text_color(&self, id: Entity) -> Option<iced::Color> {
+        self.text_colors.get(id).copied()
+    }
+
+    /// Gives the item's title a colour of its own, or with `None` returns it to
+    /// the state's text colour. Returns the colour it replaces. (Household fork.)
+    #[inline]
+    pub fn text_color_set(
+        &mut self,
+        id: Entity,
+        color: Option<iced::Color>,
+    ) -> Option<iced::Color> {
+        if !self.contains_item(id) {
+            return None;
+        }
+
+        match color {
+            Some(color) => self.text_colors.insert(id, color),
+            None => self.text_colors.remove(id),
+        }
+    }
+
     /// The position of the item in the model.
     ///
     /// ```ignore
@@ -449,6 +480,7 @@ where
     pub fn remove(&mut self, id: Entity) {
         self.items.remove(id);
         self.deactivate(id);
+        self.text_colors.remove(id);
 
         for storage in self.storage.0.values_mut() {
             storage.remove(id);
@@ -532,6 +564,29 @@ mod tests {
         let (mut model, ids) = sample_model();
         assert!(model.reorder(ids[0], ids[2], InsertPosition::After));
         assert_eq!(order_of(&model), vec![ids[1], ids[2], ids[0], ids[3]]);
+    }
+
+    #[test]
+    fn text_color_is_per_item_and_clearable() {
+        let (mut model, ids) = sample_model();
+        let red = iced::Color::from_rgb(1.0, 0.0, 0.0);
+        assert_eq!(model.text_color(ids[0]), None);
+        assert_eq!(model.text_color_set(ids[0], Some(red)), None);
+        assert_eq!(model.text_color(ids[0]), Some(red));
+        assert_eq!(model.text_color(ids[1]), None);
+        assert_eq!(model.text_color_set(ids[0], None), Some(red));
+        assert_eq!(model.text_color(ids[0]), None);
+    }
+
+    #[test]
+    fn text_color_ignores_removed_items() {
+        let (mut model, ids) = sample_model();
+        let red = iced::Color::from_rgb(1.0, 0.0, 0.0);
+        model.text_color_set(ids[2], Some(red));
+        model.remove(ids[2]);
+        assert_eq!(model.text_color(ids[2]), None);
+        assert_eq!(model.text_color_set(ids[2], Some(red)), None);
+        assert_eq!(model.text_color(ids[2]), None);
     }
 
     #[test]

@@ -2533,10 +2533,14 @@ where
                 bounds.y -= state.paragraphs[key].min_height() / 2.;
 
                 // Draw the text for this segmented button or tab.
+                // Household fork: an item's own title colour wins over its
+                // state's; the icon and close button keep the state's.
                 renderer.fill_paragraph(
                     state.paragraphs[key].raw(),
                     bounds.position(),
-                    status_appearance.text_color,
+                    self.model
+                        .text_color(key)
+                        .unwrap_or(status_appearance.text_color),
                     Rectangle {
                         x: bounds.x,
                         width: bounds.width,
