@@ -1220,6 +1220,9 @@ impl ThemeBuilder {
             control_steps_array[0]
         };
         component_hovered_overlay.alpha = 0.1;
+        // The background's own overlays, from its own index: the primary and
+        // secondary blocks below reassign `component_hovered_overlay`.
+        let background_hovered_overlay = component_hovered_overlay;
         let mut background_pressed_overlay = component_hovered_overlay;
         background_pressed_overlay.alpha = 0.2;
         #[allow(unused_assignments)]
@@ -1414,7 +1417,7 @@ impl ThemeBuilder {
                     bg_component,
                     accent,
                     on_bg_component,
-                    component_hovered_overlay,
+                    background_hovered_overlay,
                     background_pressed_overlay,
                     is_high_contrast,
                     control_steps_array[8],
@@ -1974,5 +1977,25 @@ mod tests {
             let expected = builder.accent(at_accent_lightness(&theme, green)).build();
             assert_eq!(theme.with_accent(green), expected);
         }
+    }
+
+    /// The background layer's hover and selected take its own overlay, not
+    /// the one the primary block leaves behind (cosmic-epoch#3668)
+    #[test]
+    fn the_background_hover_is_its_own() {
+        let luma = |c: Srgba| c.relative_luminance().luma;
+        let hex = |c: Srgba| {
+            let c: Srgba<u8> = c.into_format();
+            [c.red, c.green, c.blue, c.alpha]
+        };
+
+        let light = Theme::light_default().background.component;
+        assert!(luma(light.hover) < luma(light.base));
+        assert!(luma(light.selected) < luma(light.base));
+
+        let dark = Theme::dark_default().background.component;
+        assert_eq!(hex(dark.base), [0x2e, 0x2e, 0x2e, 0xff]);
+        assert_eq!(hex(dark.hover), [0x43, 0x43, 0x43, 0xff]);
+        assert_eq!(hex(dark.selected), [0x43, 0x43, 0x43, 0xff]);
     }
 }

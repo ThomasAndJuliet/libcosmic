@@ -80,6 +80,11 @@ Each commit says where it came from, using an `Origin:` line or a household-ui p
   row): a radio mark for one choice of several (Juliet, 19 Oct: "we also
   need a radio box like icon").
 - **theme:** hidden `set_active`, for headless rendering in tests.
+- **cosmic-theme:** the background layer's hover and selected take its own
+  overlay again, not the one the primary block leaves behind (white in light
+  mode since upstream 25bf8f6), so light menus show a hover: #dcdcdc on
+  #f5f5f5, as before that commit; dark is unchanged. The Qt light palette's
+  HighlightedText follows (cosmic-epoch#3668, Juliet: "34 yes").
 - **iced wgpu:** rasterised SVGs are un-premultiplied before upload.
 - **iced scrollable:**
   - `Viewport::is_user_scroll` and `is_pinned_to_end`;
