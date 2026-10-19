@@ -34,7 +34,7 @@ pub fn context_menu<'a, Message: 'static + Clone>(
             )]
         }),
         close_on_escape: true,
-        window_id: window::Id::RESERVED,
+        window_id: crate::widget::text_context_menu::current_window_id(),
         item_width: ItemWidth::Uniform(240),
         on_open: None,
         on_close: None,
@@ -233,8 +233,7 @@ impl<Message: Clone + 'static> ContextMenu<'_, Message> {
                     Some(move || {
                         // Latest roots from the owner widget
                         let mut popup_menu = popup_menu.clone();
-                        popup_menu.menu_roots =
-                            roots.with_data(Clone::clone);
+                        popup_menu.menu_roots = roots.with_data(Clone::clone);
                         crate::Element::from(
                             crate::widget::container(popup_menu).center(Length::Fill),
                         )
@@ -730,6 +729,20 @@ mod tests {
         Click,
         Closed,
         Surface(crate::surface::Action<Self>),
+    }
+
+    #[test]
+    fn a_context_menu_inherits_the_window_that_builds_it() {
+        let previous = crate::widget::text_context_menu::current_window_id();
+        for window in [window::Id::unique(), window::Id::unique()] {
+            crate::widget::text_context_menu::set_current_window_id(window);
+            let menu = context_menu(
+                crate::widget::text("Link"),
+                None::<Vec<menu::Tree<Message>>>,
+            );
+            assert_eq!(menu.window_id, window);
+        }
+        crate::widget::text_context_menu::set_current_window_id(previous);
     }
 
     #[test]

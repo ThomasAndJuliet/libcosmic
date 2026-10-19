@@ -57,7 +57,9 @@ Each commit says where it came from, using an `Origin:` line or a household-ui p
   redraws selected text over its fill, using the accent's on colour by
   default, with an additive `selected_text_color` callback for an app's
   fill-colour rule (as one-line text inputs already do).
-- **context_menu:** native popups are anchored at the window cursor in scrolled views.
+- **context_menu:** native popups are anchored at the window cursor in scrolled views;
+  menus inherit the window currently building them, as text-field menus do,
+  instead of targeting the reserved placeholder window.
 - **segmented_button:**
   - the tab-drag candidate is forgotten on click;
   - a `handle_event` refactor;
