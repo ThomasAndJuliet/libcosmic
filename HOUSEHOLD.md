@@ -53,7 +53,10 @@ Each commit says where it came from, using an `Origin:` line or a household-ui p
 - **popover:**
   - `Position::BelowAt`;
   - a modal keeps key presses and IME text from the content behind it.
-- **text_editor:** reports its id only once when a context menu wraps it.
+- **text_editor:** reports its id only once when a context menu wraps it;
+  redraws selected text over its fill, using the accent's on colour by
+  default, with an additive `selected_text_color` callback for an app's
+  fill-colour rule (as one-line text inputs already do).
 - **context_menu:** native popups are anchored at the window cursor in scrolled views.
 - **segmented_button:**
   - the tab-drag candidate is forgotten on click;

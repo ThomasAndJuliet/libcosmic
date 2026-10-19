@@ -36,7 +36,8 @@ impl<'a, Message: Clone + 'static> TextEditor<'a, Message> {
     /// Creates a new [`TextEditor`] from the given [`Content`].
     pub fn new(content: &'a Content<crate::Renderer>) -> Self {
         Self {
-            inner: iced_widget::text_editor(content),
+            inner: iced_widget::text_editor(content)
+                .selected_text_color(|theme: &crate::Theme, _| theme.cosmic().accent.on.into()),
             has_context_menu: true,
             window_id: crate::widget::text_context_menu::current_window_id(),
         }
@@ -95,6 +96,15 @@ impl<'a, Message: Clone + 'static> TextEditor<'a, Message> {
 
     pub fn size(mut self, size: impl Into<iced_core::Pixels>) -> Self {
         self.inner = self.inner.size(size);
+        self
+    }
+
+    /// Sets the foreground drawn over the text selection's fill.
+    pub fn selected_text_color(
+        mut self,
+        color: impl Fn(&crate::Theme, &Style) -> iced_core::Color + 'a,
+    ) -> Self {
+        self.inner = self.inner.selected_text_color(color);
         self
     }
 

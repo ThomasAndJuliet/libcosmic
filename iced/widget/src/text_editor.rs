@@ -139,6 +139,7 @@ pub struct TextEditor<
         &Theme,
     ) -> highlighter::Format<Renderer::Font>,
     last_status: Option<Status>,
+    selected_text_color: Option<Box<dyn Fn(&Theme, &Style) -> Color + 'a>>,
 }
 
 impl<'a, Message, Theme, Renderer>
@@ -171,6 +172,7 @@ where
                 highlighter::Format::default()
             },
             last_status: None,
+            selected_text_color: None,
         }
     }
 
@@ -317,6 +319,7 @@ where
             highlighter_settings: settings,
             highlighter_format: to_format,
             last_status: self.last_status,
+            selected_text_color: self.selected_text_color,
         }
     }
 
@@ -328,6 +331,16 @@ where
         key_binding: impl Fn(KeyPress) -> Option<Binding<Message>> + 'a,
     ) -> Self {
         self.key_binding = Some(Box::new(key_binding));
+        self
+    }
+
+    /// Sets the foreground used to redraw selected text on its fill.
+    /// The callback receives the current theme and editor appearance.
+    pub fn selected_text_color(
+        mut self,
+        color: impl Fn(&Theme, &Style) -> Color + 'a,
+    ) -> Self {
+        self.selected_text_color = Some(Box::new(color));
         self
     }
 
@@ -1129,6 +1142,10 @@ where
                     }
                 }
                 Selection::Range(ranges) => {
+                    let selected_text = self
+                        .selected_text_color
+                        .as_ref()
+                        .map_or(style.value, |color| color(theme, &style));
                     for range in ranges.into_iter().filter_map(|range| {
                         text_bounds.intersection(&(range + translation))
                     }) {
@@ -1139,6 +1156,17 @@ where
                             },
                             style.selection,
                         );
+                        // The opaque selection fill covers the first text
+                        // pass. Redraw identical glyphs in its on colour,
+                        // clipped to the selection as one-line inputs do.
+                        renderer.with_layer(range, |renderer| {
+                            renderer.fill_editor(
+                                &internal.editor,
+                                text_bounds.position(),
+                                selected_text,
+                                text_bounds,
+                            );
+                        });
                     }
                 }
                 Selection::Caret(_) => {}
