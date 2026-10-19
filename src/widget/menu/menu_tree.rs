@@ -209,13 +209,15 @@ impl From<Option<icon::Handle>> for IconSlot {
     }
 }
 
-/// A menu entry: label, optional leading icon, optional check column, enabled state and action.
+/// A menu entry: label, optional leading icon, optional check column or selected fill, enabled state and action.
 #[derive(Clone)]
 pub struct Entry<A, L> {
     label: L,
     icon: IconSlot,
     /// `Some` draws the check column
     checked: Option<bool>,
+    /// Drawn as the chosen one of several, see [`Entry::selected`]
+    selected: bool,
     enabled: bool,
     action: A,
 }
@@ -226,6 +228,7 @@ impl<A, L> Entry<A, L> {
             label,
             icon: IconSlot::None,
             checked: None,
+            selected: false,
             enabled: true,
             action,
         }
@@ -249,6 +252,17 @@ impl<A, L> Entry<A, L> {
     #[must_use]
     pub fn checked(mut self, checked: bool) -> Self {
         self.checked = Some(checked);
+        self
+    }
+
+    /// Draw the entry as one choice of several, with no check column: when
+    /// `selected` is true the row is filled with the theme's selected
+    /// colour and its label and icon drawn in the selected text colour,
+    /// semibold, as a dropdown draws its chosen option; when false it is
+    /// an ordinary entry. Use it in place of [`Entry::checked`]
+    #[must_use]
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
         self
     }
 
@@ -292,6 +306,7 @@ fn entry_tree<
         label,
         icon,
         checked,
+        selected,
         enabled,
         action,
     } = entry;
@@ -354,7 +369,12 @@ fn entry_tree<
 
     let ellipsize =
         iced_core::text::Ellipsize::Middle(iced_core::text::EllipsizeHeightLimit::Lines(1));
-    items.push(widget::text(label.into()).ellipsize(ellipsize).into());
+    let label = widget::text(label.into()).ellipsize(ellipsize);
+    items.push(if selected {
+        label.font(crate::font::semibold()).into()
+    } else {
+        label.into()
+    });
     items.push(widget::space::horizontal().into());
     items.push(
         widget::text(key)
@@ -364,10 +384,61 @@ fn entry_tree<
     );
 
     let mut button = menu_button(items);
+    if selected {
+        button = button.selected(true).class(selected_menu_item());
+    }
     if enabled {
         button = button.on_press(action.message());
     }
     MenuTree::from(Element::from(button))
+}
+
+/// A chosen entry's look ([`Entry::selected`]): the menu item's own, filled
+/// with the menu's selected colour, its label and icon in the accent text
+/// colour, as libcosmic draws a dropdown's chosen option
+fn selected_menu_item() -> theme::Button {
+    use crate::widget::button::{Catalog, Style};
+    use iced_core::{Background, Color};
+
+    fn chosen(mut style: Style, theme: &crate::Theme, pressed: bool) -> Style {
+        let cosmic = theme.cosmic();
+        let component = &cosmic.background(theme.transparent).component;
+        let fill = if pressed {
+            component.pressed
+        } else {
+            component.selected_state_color()
+        };
+        let text = Color::from(cosmic.accent_text_color());
+        style.background = Some(Background::Color(fill.into()));
+        style.text_color = Some(text);
+        style.icon_color = Some(text);
+        style
+    }
+
+    theme::Button::Custom {
+        active: Box::new(|focused, theme| {
+            chosen(
+                theme.active(focused, true, &theme::Button::MenuItem),
+                theme,
+                false,
+            )
+        }),
+        disabled: Box::new(|theme| theme.disabled(&theme::Button::MenuItem)),
+        hovered: Box::new(|focused, theme| {
+            chosen(
+                theme.hovered(focused, true, &theme::Button::MenuItem),
+                theme,
+                false,
+            )
+        }),
+        pressed: Box::new(|focused, theme| {
+            chosen(
+                theme.pressed(focused, true, &theme::Button::MenuItem),
+                theme,
+                true,
+            )
+        }),
+    }
 }
 
 /// Create a list of menu items from a vector of `MenuItem`.

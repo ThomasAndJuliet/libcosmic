@@ -68,6 +68,13 @@ Each commit says where it came from, using an `Origin:` line or a household-ui p
     `Model::text_color_set`: the title is drawn in it in every state, in place
     of the state's text colour; the icon, the close button and the drop marker
     keep the state's colour (household-ui proposal #39).
+- **menus:** `menu::Entry::selected(bool)` draws an entry as one choice of
+  several, with no check column: the chosen one is filled with the menu's
+  selected colour (`selected_state_color`), its label and icon in the accent
+  text colour, semibold, as a dropdown draws its chosen option; an unchosen
+  one is an ordinary entry. It goes through `menu::items`, so the expanded
+  and the collapsed `responsive_menu_bar` both draw it. `CheckBox` and
+  `Entry::checked` are unchanged (T-076, Juliet 14 Oct).
 - **theme:** hidden `set_active`, for headless rendering in tests.
 - **iced wgpu:** rasterised SVGs are un-premultiplied before upload.
 - **iced scrollable:**
