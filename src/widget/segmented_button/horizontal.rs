@@ -228,3 +228,119 @@ where
         size
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::widget::segmented_button::SingleSelectModel;
+    use iced::advanced::renderer::Headless;
+    use iced_core::Color;
+    use iced_core::mouse::Cursor;
+    use iced_core::renderer::Style;
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    use std::borrow::Cow;
+
+    const WIDTH: u32 = 400;
+    const HEIGHT: u32 = 48;
+
+    #[derive(Clone)]
+    enum Message {}
+
+    /// Two tabs of the same wide word, drawn in `theme`; returns the RGBA pixels
+    fn drawn(model: &SingleSelectModel, theme: &crate::Theme) -> Vec<u8> {
+        {
+            let mut font_system = iced::advanced::graphics::text::font_system()
+                .write()
+                .unwrap();
+            font_system.load_font(Cow::Borrowed(
+                &include_bytes!("../../../res/open-sans/OpenSans-Regular.ttf")[..],
+            ));
+        }
+        let mut renderer = iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
+            iced::Font::default(),
+            iced::Pixels(14.0),
+            Some("tiny-skia"),
+        ))
+        .expect("a headless renderer");
+        let bar: crate::Element<'_, Message> = horizontal::<_, Message>(model)
+            .width(Length::Fixed(WIDTH as f32))
+            .button_height(HEIGHT as u16)
+            .into();
+        let mut ui = UserInterface::build(
+            bar,
+            Size::new(WIDTH as f32, HEIGHT as f32),
+            Cache::default(),
+            &mut renderer,
+        );
+        ui.draw(
+            &mut renderer,
+            theme,
+            &Style {
+                icon_color: Color::BLACK,
+                text_color: Color::BLACK,
+                scale_factor: 1.0,
+            },
+            Cursor::Unavailable,
+        );
+        renderer.screenshot(Size::new(WIDTH, HEIGHT), 1.0, Color::TRANSPARENT)
+    }
+
+    /// Pixels of `colour` (red here) in the columns from `from` to `to`
+    fn red_in(pixels: &[u8], from: u32, to: u32) -> usize {
+        let mut count = 0;
+        for y in 0..HEIGHT {
+            for x in from..to {
+                let at = ((y * WIDTH + x) * 4) as usize;
+                let [r, g, b, a] = [pixels[at], pixels[at + 1], pixels[at + 2], pixels[at + 3]];
+                if a > 200 && r > 180 && g < 90 && b < 90 {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    /// An item's own title colour is drawn on its title, only on it, and an item
+    /// without one keeps its state's colour; in light and dark, for the
+    /// active tab and the inactive one alike
+    #[test]
+    fn an_items_own_title_colour_is_drawn_on_its_title_alone() {
+        for theme in [crate::Theme::light(), crate::Theme::dark()] {
+            let mut ids = Vec::new();
+            let mut model = SingleSelectModel::builder()
+                .insert(|b| b.text("Mmmmmmmm").with_id(|id| ids.push(id)))
+                .insert(|b| b.text("Mmmmmmmm").with_id(|id| ids.push(id)))
+                .build();
+            model.activate(ids[0]);
+            let none = drawn(&model, &theme);
+            assert_eq!(
+                red_in(&none, 0, WIDTH),
+                0,
+                "no red without a colour of its own"
+            );
+
+            // The inactive second tab: red there and nowhere else
+            model.text_color_set(ids[1], Some(Color::from_rgb(1.0, 0.0, 0.0)));
+            let second = drawn(&model, &theme);
+            assert!(
+                red_in(&second, WIDTH / 2, WIDTH) > 20,
+                "the second title is red"
+            );
+            assert_eq!(red_in(&second, 0, WIDTH / 2), 0, "the first title is not");
+
+            // The active first tab keeps its own, too
+            model.text_color_set(ids[0], Some(Color::from_rgb(1.0, 0.0, 0.0)));
+            let both = drawn(&model, &theme);
+            assert!(red_in(&both, 0, WIDTH / 2) > 20, "the active title is red");
+
+            // Cleared: back to the state's colour
+            model.text_color_set(ids[0], None);
+            model.text_color_set(ids[1], None);
+            assert_eq!(
+                drawn(&model, &theme),
+                none,
+                "a cleared colour draws as before"
+            );
+        }
+    }
+}
