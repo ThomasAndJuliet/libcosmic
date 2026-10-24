@@ -363,7 +363,9 @@ where
                     return;
                 }
             }
-            loop {
+            // A nested `process_event` (window creation, `Control::Exit`)
+            // may finish the instance and exit; it must not be polled again.
+            while !event_loop.exiting() {
                 let poll = self.instance.as_mut().poll(&mut self.context);
 
                 match poll {
