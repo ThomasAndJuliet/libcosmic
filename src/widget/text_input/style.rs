@@ -24,7 +24,10 @@ pub struct Appearance {
     pub label_color: Color,
     /// The placeholder text [`Color`].
     pub placeholder_color: Color,
-    /// The text [`Color`] of the text input.
+    /// The selected text [`Color`] of the text input. Unused: selected text
+    /// is drawn in the fill rule's colour for the text colour on
+    /// `selected_fill` (household-ui RULES.md rule 6). Kept so styles that
+    /// set it still build.
     pub selected_text_color: Color,
     /// The icon [`Color`] of the text input.
     pub icon_color: Option<Color>,

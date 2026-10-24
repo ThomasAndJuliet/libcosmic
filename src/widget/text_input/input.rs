@@ -2766,6 +2766,16 @@ pub fn draw<'a, Message>(
         child_index += 1;
     }
 
+    // The selection fill, opaque: it is drawn over the unselected text
+    // (household-ui RULES.md rule 6; the theme's accent already is)
+    let selection_fill = {
+        let mut beneath: Color = theme.current_container().base.into();
+        if let Background::Color(background) = appearance.background {
+            beneath = crate::theme::selection::opaque_over(background, beneath);
+        }
+        crate::theme::selection::opaque_over(appearance.selected_fill, beneath)
+    };
+
     let text = value.to_string();
     let font = font.unwrap_or_else(|| renderer.default_font());
     let size = size.unwrap_or_else(|| renderer.default_size().0);
@@ -2875,7 +2885,7 @@ pub fn draw<'a, Message>(
                                     },
                                     snap: true,
                                 },
-                                appearance.selected_fill,
+                                selection_fill,
                             )
                         })
                         .collect();
@@ -2949,16 +2959,26 @@ pub fn draw<'a, Message>(
         };
         renderer.fill_text(text.clone(), bounds.position(), color, text_bounds);
 
-        // Redraw the same text in the selected color, clipped to the selection quads,
-        // so glyph shaping and positioning stay identical to the unselected pass.
+        // Redraw the same text over the selection fill, clipped to each
+        // selection quad, so glyph shaping and positioning stay identical to
+        // the unselected pass. A layer draws its quads before its text, so
+        // the fill goes in the quad's own layer: drawn in this one it would
+        // lie under the first pass, whose glyphs would fringe the new ones.
+        // The selected text is drawn by the fill rule, on a solid fill
+        // (household-ui RULES.md rule 6: text boxes are short writing).
         if is_selecting {
-            fill_cursors(renderer);
-            for (quad, _) in &cursors {
-                renderer.with_layer(quad.bounds + shift, |renderer| {
+            let selected_text_color = crate::theme::selection::on_solid(color, selection_fill);
+            for (quad, fill) in &cursors {
+                let quad = renderer::Quad {
+                    bounds: quad.bounds + shift,
+                    ..*quad
+                };
+                renderer.with_layer(quad.bounds, |renderer| {
+                    renderer.fill_quad(quad, *fill);
                     renderer.fill_text(
                         text.clone(),
                         bounds.position(),
-                        appearance.selected_text_color,
+                        selected_text_color,
                         text_bounds,
                     );
                 });

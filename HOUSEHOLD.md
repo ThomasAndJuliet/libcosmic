@@ -58,6 +58,17 @@ Each commit says where it came from, using an `Origin:` line or a household-ui p
   redraws selected text over its fill, using the accent's on colour by
   default, with an additive `selected_text_color` callback for an app's
   fill-colour rule (as one-line text inputs already do).
+- **selection (household highlight standard, stage 1):** text inputs and
+  text editors draw selected text by the household fill rule, from
+  `household-tones` (household-kit, a git dependency): on a solid accent
+  fill, `on_solid` of the text colour. `TextEditor::selection_tint(beneath,
+  strongest)` marks a selection with the tint instead, `tint` and `on_tint`.
+  The fill is drawn in each selection rectangle's own layer, so it covers
+  the unselected text, which no longer fringes the redrawn glyphs; iced's
+  editor has an additive `selection_fill` callback for it. Text inputs'
+  `selected_text_color` is unused. To do (stage 2): highlighter span
+  colours in the editor, and iced's selectable `Text` (household-ui
+  RULES.md rule 6, Juliet 25 Oct).
 - **context_menu:** native popups are anchored at the window cursor in scrolled views;
   menus inherit the window currently building them, as text-field menus do,
   instead of targeting the reserved placeholder window.
