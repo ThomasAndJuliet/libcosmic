@@ -69,6 +69,10 @@ Each commit says where it came from, using an `Origin:` line or a household-ui p
   `selected_text_color` is unused. To do (stage 2): highlighter span
   colours in the editor, and iced's selectable `Text` (household-ui
   RULES.md rule 6, Juliet 25 Oct).
+- **CI:** `scripts/ci-private-crates.sh` (copied unchanged from COSMIC
+  Terminal) lets the job fetch `household-kit`, the private git dependency of
+  `household-tones`, over ssh with a read-only deploy key; the secret
+  `HOUSEHOLD_KIT_DEPLOY_KEY` must be set on this repository.
 - **context_menu:** native popups are anchored at the window cursor in scrolled views;
   menus inherit the window currently building them, as text-field menus do,
   instead of targeting the reserved placeholder window.
