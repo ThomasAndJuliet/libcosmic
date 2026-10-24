@@ -13,13 +13,22 @@
 //! winit allows one event loop per process, so this test runs itself again.
 //!
 //! * Parent (no `EXIT_TEARDOWN_CHILD`): starts its own headless weston, then
-//!   runs the child `EXIT_TEARDOWN_RUNS` times (20) for each variant, with
-//!   and without a popup open at the moment of quitting. It asserts that the
-//!   child exits with code 0 (not killed by a signal) and logs no
-//!   "did not stop". No weston means the test fails: it never skips.
-//! * Child (`EXIT_TEARDOWN_CHILD=plain|popup`): a minimal COSMIC application
-//!   quits by itself. When `run` has returned, the display is gone, so any
-//!   thread still named `ct-wayland` is a thread nobody joined: exit code 3.
+//!   runs the child `EXIT_TEARDOWN_RUNS` times (20) for each variant
+//!   (`EXIT_TEARDOWN_VARIANTS`, default `plain,popup,window`). It asserts
+//!   that the child exits with code 0 (not killed by a signal, no panic) and
+//!   logs no "did not stop". No weston means the test fails: it never skips.
+//! * Child (`EXIT_TEARDOWN_CHILD=plain|popup|window`): a minimal COSMIC
+//!   application quits by itself: with `iced::exit()` from its main window,
+//!   with a popup open, or as COSMIC Terminal quits when its command ends
+//!   (no main window; a window opened with `window::open` is closed as soon
+//!   as it opens, and the application exits when it is gone). When `run`
+//!   has returned, the display is gone, so any thread still named
+//!   `ct-wayland` is a thread nobody joined: exit code 3.
+//!
+//! The `window` variant quits while iced_winit is still handling the
+//! window's creation: the instance finishes inside a nested
+//! `Runner::process_event`, and polling it again afterwards panicked with
+//! "`async fn` resumed after completion".
 //!
 //! Set `EXIT_TEARDOWN_COMPOSITOR=external` to use the compositor in
 //! `WAYLAND_DISPLAY` instead of starting weston.
@@ -47,8 +56,9 @@ static POPUP_DRAWN: AtomicBool = AtomicBool::new(false);
 
 fn main() {
     match std::env::var(CHILD_ENV).as_deref() {
-        Ok("plain") => child(false),
-        Ok("popup") => child(true),
+        Ok("plain") => child(Variant::Plain),
+        Ok("popup") => child(Variant::Popup),
+        Ok("window") => child(Variant::Window),
         Ok(other) => panic!("unknown {CHILD_ENV} value {other:?}"),
         Err(_) => parent(),
     }
@@ -60,17 +70,32 @@ fn main() {
 #[derive(Clone, Debug)]
 enum Message {
     Tick,
+    Opened(window::Id),
+    Closed,
+}
+
+/// How the child quits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Variant {
+    /// `iced::exit()` from the main window.
+    Plain,
+    /// `iced::exit()` with a popup open.
+    Popup,
+    /// As COSMIC Terminal quits when its command ends (`-- true`): no main
+    /// window; one window opened with `window::open`, closed as soon as it
+    /// has opened, and `iced::exit()` when it is gone.
+    Window,
 }
 
 struct App {
     core: Core,
     ticks: u32,
-    with_popup: bool,
+    variant: Variant,
 }
 
 impl Application for App {
     type Executor = cosmic::executor::Default;
-    type Flags = bool;
+    type Flags = Variant;
     type Message = Message;
     const APP_ID: &'static str = "org.cosmic.ExitTeardownTest";
 
@@ -82,33 +107,52 @@ impl Application for App {
         &mut self.core
     }
 
-    fn init(core: Core, with_popup: bool) -> (Self, Task<Message>) {
+    fn init(core: Core, variant: Variant) -> (Self, Task<Message>) {
+        let task = if variant == Variant::Window {
+            let (_, opened) = window::open(window::Settings {
+                exit_on_close_request: false,
+                ..window::Settings::default()
+            });
+            opened.map(|id| cosmic::Action::App(Message::Opened(id)))
+        } else {
+            Task::none()
+        };
         (
             App {
                 core,
                 ticks: 0,
-                with_popup,
+                variant,
             },
-            Task::none(),
+            task,
         )
     }
 
     fn subscription(&self) -> Subscription<Message> {
+        if self.variant == Variant::Window {
+            return Subscription::none();
+        }
         cosmic::iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick)
+    }
+
+    fn on_close_requested(&self, _id: window::Id) -> Option<Message> {
+        (self.variant == Variant::Window).then_some(Message::Closed)
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::Opened(id) => window::close(id),
+            Message::Closed => cosmic::iced::exit(),
             Message::Tick => {
+                let with_popup = self.variant == Variant::Popup;
                 self.ticks += 1;
                 // The popup variant gets more time to be built and shown.
-                let quit_at = if self.with_popup { 8 } else { 3 };
+                let quit_at = if with_popup { 8 } else { 3 };
                 if self.ticks >= quit_at {
                     return cosmic::iced::exit();
                 }
                 // The SCTK thread must know the parent window, so the popup
                 // is requested after start-up, not in `init`.
-                if self.with_popup && self.ticks == 2 {
+                if with_popup && self.ticks == 2 {
                     return self.open_popup();
                 }
                 Task::none()
@@ -118,6 +162,10 @@ impl Application for App {
 
     fn view(&self) -> Element<'_, Message> {
         cosmic::widget::text("exit teardown test").into()
+    }
+
+    fn view_window(&self, _id: window::Id) -> Element<'_, Message> {
+        cosmic::widget::text("exit teardown test window").into()
     }
 }
 
@@ -185,12 +233,16 @@ fn sctk_threads() -> Vec<String> {
         .collect()
 }
 
-fn child(with_popup: bool) -> ! {
+fn child(variant: Variant) -> ! {
     static LOGGER: StderrLogger = StderrLogger;
     log::set_logger(&LOGGER).expect("set logger");
     log::set_max_level(log::LevelFilter::Warn);
 
-    let result = cosmic::app::run::<App>(Settings::default(), with_popup);
+    let settings = match variant {
+        Variant::Window => Settings::default().no_main_window(true).exit_on_close(false),
+        Variant::Plain | Variant::Popup => Settings::default(),
+    };
+    let result = cosmic::app::run::<App>(settings, variant);
     // `run` has returned: winit's event loop, and the display, are gone.
     if let Err(err) = result {
         eprintln!("run failed: {err}");
@@ -201,7 +253,7 @@ fn child(with_popup: bool) -> ! {
         eprintln!("{} ct-wayland thread(s) still alive after run returned", threads.len());
         std::process::exit(EXIT_THREAD_LEFT);
     }
-    if with_popup && !POPUP_DRAWN.load(Ordering::SeqCst) {
+    if variant == Variant::Popup && !POPUP_DRAWN.load(Ordering::SeqCst) {
         eprintln!("the popup was never drawn, so this run tested nothing");
         std::process::exit(EXIT_NO_POPUP);
     }
@@ -355,7 +407,11 @@ fn parent() {
 
     let mut failures = Vec::new();
     let mut passed = 0;
-    for variant in ["plain", "popup"] {
+    // EXIT_TEARDOWN_VARIANTS=window,plain runs only those.
+    let variants: Vec<String> = std::env::var("EXIT_TEARDOWN_VARIANTS")
+        .map(|list| list.split(',').map(str::to_owned).collect())
+        .unwrap_or_else(|_| ["plain", "popup", "window"].map(str::to_owned).to_vec());
+    for variant in variants.iter().map(String::as_str) {
         let mut ok = 0;
         for run in 1..=runs {
             let (stderr, status) = run_child(variant, &env, Duration::from_secs(60));
@@ -370,6 +426,7 @@ fn parent() {
                         Some(EXIT_THREAD_LEFT) => "a ct-wayland thread outlived run",
                         Some(EXIT_NO_POPUP) => "the popup was never drawn",
                         Some(EXIT_RUN_FAILED) => "run failed",
+                        Some(101) => "a panic",
                         _ => "unexpected",
                     }
                 ));
@@ -400,7 +457,7 @@ fn parent() {
         for failure in &failures {
             eprintln!("{failure}\n");
         }
-        println!("\ntest result: FAILED. {passed} passed; {} failed", 2 - passed);
+        println!("\ntest result: FAILED. {passed} passed; {} failed", variants.len() - passed);
         panic!("quitting an application was not clean in {} run(s)", failures.len());
     }
     println!("\ntest result: ok. {passed} passed; 0 failed");
