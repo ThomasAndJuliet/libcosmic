@@ -140,6 +140,7 @@ pub struct TextEditor<
     ) -> highlighter::Format<Renderer::Font>,
     last_status: Option<Status>,
     selected_text_color: Option<Box<dyn Fn(&Theme, &Style) -> Color + 'a>>,
+    selection_fill: Option<Box<dyn Fn(&Theme, &Style) -> Color + 'a>>,
 }
 
 impl<'a, Message, Theme, Renderer>
@@ -173,6 +174,7 @@ where
             },
             last_status: None,
             selected_text_color: None,
+            selection_fill: None,
         }
     }
 
@@ -320,6 +322,7 @@ where
             highlighter_format: to_format,
             last_status: self.last_status,
             selected_text_color: self.selected_text_color,
+            selection_fill: self.selection_fill,
         }
     }
 
@@ -341,6 +344,18 @@ where
         color: impl Fn(&Theme, &Style) -> Color + 'a,
     ) -> Self {
         self.selected_text_color = Some(Box::new(color));
+        self
+    }
+
+    /// Sets the fill drawn behind selected text, in place of the style's
+    /// `selection`. The callback receives the current theme and editor
+    /// appearance. The fill is drawn over the unselected text, so it should
+    /// be opaque.
+    pub fn selection_fill(
+        mut self,
+        color: impl Fn(&Theme, &Style) -> Color + 'a,
+    ) -> Self {
+        self.selection_fill = Some(Box::new(color));
         self
     }
 
@@ -1142,24 +1157,35 @@ where
                     }
                 }
                 Selection::Range(ranges) => {
+                    // Only the default text colour is replaced: spans the
+                    // highlighter coloured keep their colours on the fill
+                    // (moving them too is stage 2 of the household
+                    // highlight standard).
                     let selected_text = self
                         .selected_text_color
                         .as_ref()
                         .map_or(style.value, |color| color(theme, &style));
+                    let selection = self
+                        .selection_fill
+                        .as_ref()
+                        .map_or(style.selection, |color| color(theme, &style));
                     for range in ranges.into_iter().filter_map(|range| {
                         text_bounds.intersection(&(range + translation))
                     }) {
-                        renderer.fill_quad(
-                            renderer::Quad {
-                                bounds: range,
-                                ..renderer::Quad::default()
-                            },
-                            style.selection,
-                        );
-                        // The opaque selection fill covers the first text
-                        // pass. Redraw identical glyphs in its on colour,
-                        // clipped to the selection as one-line inputs do.
+                        // A layer draws its quads before its text, so a
+                        // fill drawn here, in the editor's layer, would lie
+                        // under the first text pass. Inside its own layer
+                        // the fill covers that pass, and the glyphs redrawn
+                        // over it, clipped to the selection as one-line
+                        // inputs do, leave no fringe of the old colour.
                         renderer.with_layer(range, |renderer| {
+                            renderer.fill_quad(
+                                renderer::Quad {
+                                    bounds: range,
+                                    ..renderer::Quad::default()
+                                },
+                                selection,
+                            );
                             renderer.fill_editor(
                                 &internal.editor,
                                 text_bounds.position(),
