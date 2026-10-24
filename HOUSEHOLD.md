@@ -49,6 +49,7 @@ This replaces a vendored `libcosmic/` subtree and a vendored `patches/winit-wayl
 Each commit says where it came from, using an `Origin:` line or a household-ui proposal number.
 
 - **winit:** drop pointer events for a released pointer; this fixes the "failed to get pointer data" panic.
+- **iced_winit:** the SCTK thread is stopped and joined before winit's event loop disconnects the display; this fixes the segfault in libwayland when an app exits.
 - **toaster:** progress, persistent toasts, and updating a toast in place.
 - **popover:**
   - `Position::BelowAt`;
