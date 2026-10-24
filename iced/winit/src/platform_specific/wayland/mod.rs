@@ -43,6 +43,8 @@ pub(crate) enum Action {
     SetImeAllowed(bool),
     SetImeCursorArea(i32, i32, i32, i32),
     SetImePurpose(ImePurpose),
+    /// Ends the SCTK thread's loop, so that it can be joined.
+    Shutdown,
 }
 
 impl std::fmt::Debug for Action {
@@ -88,6 +90,7 @@ impl std::fmt::Debug for Action {
             Self::SetImePurpose(purpose) => {
                 f.debug_tuple("SetImePurpose").field(purpose).finish()
             }
+            Self::Shutdown => write!(f, "Shutdown"),
         }
     }
 }
@@ -97,6 +100,9 @@ pub(crate) struct WaylandSpecific {
     winit_event_sender: Option<mpsc::UnboundedSender<Control>>,
     proxy: Option<winit::event_loop::EventLoopProxy>,
     sender: Option<calloop::channel::Sender<Action>>,
+    sctk_thread: Option<
+        std::thread::JoinHandle<Result<(), event_loop::Error>>,
+    >,
     display_handle: Option<OwnedDisplayHandle>,
     conn: Option<Connection>,
     modifiers: Modifiers,
@@ -136,13 +142,7 @@ impl PlatformSpecific {
         };
         self.wayland.display_handle = Some(display);
         self.wayland.proxy = Some(raw);
-        self.wayland.sender =
-            crate::platform_specific::event_loop::SctkEventLoop::new(
-                self.wayland.winit_event_sender.clone().unwrap(),
-                self.wayland.proxy.clone().unwrap(),
-                self.wayland.display_handle.clone().unwrap(),
-            )
-            .ok();
+        self.wayland.start_sctk_thread();
         self
     }
 
@@ -152,13 +152,7 @@ impl PlatformSpecific {
             && self.wayland.display_handle.is_some()
             && self.wayland.proxy.is_some()
         {
-            self.wayland.sender =
-                crate::platform_specific::event_loop::SctkEventLoop::new(
-                    self.wayland.winit_event_sender.clone().unwrap(),
-                    self.wayland.proxy.clone().unwrap(),
-                    self.wayland.display_handle.clone().unwrap(),
-                )
-                .ok();
+            self.wayland.start_sctk_thread();
         }
 
         if let Some(tx) = self.wayland.sender.as_ref() {
@@ -169,7 +163,60 @@ impl PlatformSpecific {
     }
 }
 
+impl Drop for WaylandSpecific {
+    /// Stops and joins the SCTK thread while winit's event loop, and with it
+    /// the `wl_display`, is still alive: `run_app` drops the application,
+    /// and this with it, before the event loop. Otherwise the thread destroys
+    /// its proxies while the main thread disconnects the display, which frees
+    /// the display's object map under it.
+    fn drop(&mut self) {
+        let Some(thread) = self.sctk_thread.take() else {
+            return;
+        };
+        if let Some(sender) = self.sender.take() {
+            _ = sender.send(Action::Shutdown);
+        }
+
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while !thread.is_finished() {
+            if std::time::Instant::now() >= deadline {
+                // The thread still uses the display. Keep it connected until
+                // the process exits rather than free it under the thread.
+                log::warn!("The SCTK thread did not stop; not joining it.");
+                std::mem::forget(self.display_handle.take());
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        if let Err(err) = thread.join() {
+            log::error!("SCTK thread panicked: {err:?}");
+        }
+    }
+}
+
 impl WaylandSpecific {
+    fn start_sctk_thread(&mut self) {
+        let (Some(winit_event_sender), Some(proxy), Some(display_handle)) = (
+            self.winit_event_sender.clone(),
+            self.proxy.clone(),
+            self.display_handle.clone(),
+        ) else {
+            return;
+        };
+        match crate::platform_specific::event_loop::SctkEventLoop::new(
+            winit_event_sender,
+            proxy,
+            display_handle,
+        ) {
+            Ok((sender, thread)) => {
+                self.sender = Some(sender);
+                self.sctk_thread = thread;
+            }
+            Err(_) => self.sender = None,
+        }
+    }
+
     pub(crate) fn conn(&self) -> Option<&Connection> {
         self.conn.as_ref()
     }
@@ -208,6 +255,7 @@ impl WaylandSpecific {
             subsurface_state,
             surface_subsurfaces,
             popup_toplevels,
+            sctk_thread: _,
         } = self;
 
         if let SctkEvent::PopupEvent {

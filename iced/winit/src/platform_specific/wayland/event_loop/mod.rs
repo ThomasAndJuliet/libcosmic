@@ -87,7 +87,10 @@ impl SctkEventLoop {
         proxy: winit::event_loop::EventLoopProxy,
         display: OwnedDisplayHandle,
     ) -> Result<
-        calloop::channel::Sender<super::Action>,
+        (
+            calloop::channel::Sender<super::Action>,
+            Option<std::thread::JoinHandle<Result<(), Error>>>,
+        ),
         Box<dyn std::any::Any + std::marker::Send>,
     > {
         let Ok(dh) = display.display_handle() else {
@@ -109,6 +112,9 @@ impl SctkEventLoop {
         let (action_tx, action_rx) = calloop::channel::channel();
         let res: std::thread::JoinHandle<Result<(), Error>> =
             std::thread::Builder::new().name("ct-wayland".into()).spawn(move || {
+                // Set by `Action::Shutdown`; the loop below then returns.
+                let stop = std::rc::Rc::new(std::cell::Cell::new(false));
+                let stop_requested = stop.clone();
                 let _display = connection.display();
                 let (globals, event_queue) =
                     registry_queue_init(&connection).map_err(Error::Global)?;
@@ -120,9 +126,12 @@ impl SctkEventLoop {
                 let registry_state = RegistryState::new(&globals);
 
                 _ = loop_handle
-                .insert_source(action_rx, |event, _, state| {
+                .insert_source(action_rx, move |event, _, state| {
                     match event {
                         calloop::channel::Event::Msg(e) => match e {
+                            crate::platform_specific::Action::Shutdown => {
+                                stop_requested.set(true);
+                            }
                             crate::platform_specific::Action::Action(a) => {
                                 if let Err(err) = state.handle_action(a) {
                                     log::warn!("{err:?}");
@@ -520,6 +529,9 @@ impl SctkEventLoop {
                     {
                         log::error!("SCTK dispatch error: {err}");
                     }
+                    if stop.get() {
+                        return Ok(());
+                    }
                     let had_events = !state.state.sctk_events.is_empty();
                     let mut wake_up = had_events;
 
@@ -596,14 +608,14 @@ impl SctkEventLoop {
         if res.is_finished() {
             log::warn!("SCTK thread finished.");
             match res.join() {
-                Ok(_) => Ok(action_tx),
+                Ok(_) => Ok((action_tx, None)),
                 Err(e) => {
                     log::error!("SCTK thread exited with error: {e:?}");
                     return Err(e);
                 }
             }
         } else {
-            Ok(action_tx)
+            Ok((action_tx, Some(res)))
         }
     }
 }
