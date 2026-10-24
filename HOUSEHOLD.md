@@ -147,6 +147,7 @@ Changes Tom's cosmic-term sessions made to its vendored copy. Each commit has an
 - libcosmic's library tests;
 - a check with the apps' feature set;
 - the popup lifecycle and menu-model tests that used to run in cosmic-term's CI;
+- `tests/exit_teardown.rs`: a minimal app quits under a headless weston, with and without a popup, and must exit 0 with no SCTK thread left (needs `weston`; fails without it);
 - cosmic-theme's tests;
 - iced's renderer failure tests and SVG tests;
 - a check of winit's Wayland backend.

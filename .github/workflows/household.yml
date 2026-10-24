@@ -33,7 +33,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libxkbcommon-dev libfontconfig1-dev libfreetype6-dev libglvnd-dev libinput-dev libvulkan-dev libwayland-dev libx11-dev libx11-xcb-dev libxcursor-dev libxi-dev libxrandr-dev libasound2-dev libdbus-1-dev
+          sudo apt-get install -y pkg-config libxkbcommon-dev libfontconfig1-dev libfreetype6-dev libglvnd-dev libinput-dev libvulkan-dev libwayland-dev libx11-dev libx11-xcb-dev libxcursor-dev libxi-dev libxrandr-dev libasound2-dev libdbus-1-dev weston
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -50,6 +50,13 @@ jobs:
         run: |
           cargo test --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib lifecycle_tests -- --test-threads=1
           cargo test --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib popup_state_tests -- --test-threads=1
+
+      # Quitting must not segfault or leave the SCTK thread behind. The test
+      # starts its own headless weston (hence the package above) and runs
+      # a minimal application against it 20 times, with and without a popup.
+      # It fails, and does not skip, if weston is missing.
+      - name: Quitting an application, under a headless weston
+        run: cargo test --no-default-features --features winit,wayland,tokio,multi-window --test exit_teardown
 
       - name: cosmic-theme
         run: cargo test -p cosmic-theme
