@@ -527,6 +527,20 @@ impl SctkEventLoop {
                     if let Err(err) =
                         state.event_loop.dispatch(None, &mut state.state)
                     {
+                        // wayland-backend keeps the first fatal error (EPIPE
+                        // when the compositor goes away, a protocol error)
+                        // and fails every later call, so dispatching again
+                        // would fail at once, forever. Stop, and wake winit,
+                        // which shares the display and so sees the error too.
+                        if let Some(fatal) =
+                            state.state.connection.backend().last_error()
+                        {
+                            log::error!(
+                                "SCTK connection lost, stopping its thread: {fatal}"
+                            );
+                            state.state.proxy.wake_up();
+                            return Err(Error::Calloop(err));
+                        }
                         log::error!("SCTK dispatch error: {err}");
                     }
                     if stop.get() {
