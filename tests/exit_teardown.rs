@@ -14,16 +14,29 @@
 //!
 //! * Parent (no `EXIT_TEARDOWN_CHILD`): starts its own headless weston, then
 //!   runs the child `EXIT_TEARDOWN_RUNS` times (20) for each variant
-//!   (`EXIT_TEARDOWN_VARIANTS`, default `plain,popup,window`). It asserts
-//!   that the child exits with code 0 (not killed by a signal, no panic) and
-//!   logs no "did not stop". No weston means the test fails: it never skips.
-//! * Child (`EXIT_TEARDOWN_CHILD=plain|popup|window`): a minimal COSMIC
+//!   (`EXIT_TEARDOWN_VARIANTS`, default `plain,popup,window,lost`). It
+//!   asserts that the child exits with code 0 (not killed by a signal, no
+//!   panic) and logs no "did not stop". No weston means the test fails: it
+//!   never skips.
+//! * Child (`EXIT_TEARDOWN_CHILD=plain|popup|window|lost`): a minimal COSMIC
 //!   application quits by itself: with `iced::exit()` from its main window,
 //!   with a popup open, or as COSMIC Terminal quits when its command ends
 //!   (no main window; a window opened with `window::open` is closed as soon
 //!   as it opens, and the application exits when it is gone). When `run`
 //!   has returned, the display is gone, so any thread still named
 //!   `ct-wayland` is a thread nobody joined: exit code 3.
+//!
+//! The `lost` variant does not quit: the compositor goes away under it, as
+//! when the compositor crashes or the session ends. Each run has its own
+//! weston, which the parent kills (SIGKILL) once the child is up. `run` may
+//! then return an error; the child must still end within
+//! `LOST_EXIT_BOUND` of the kill, with the SCTK thread stopped and joined.
+//! The SCTK thread may report the dead connection in at most
+//! `LOST_MAX_SCTK_ERROR_LINES` lines, and the whole process in at most
+//! `LOST_MAX_ERROR_LINES` (other parts of the stack print a few lines of
+//! their own). The SCTK thread used to dispatch the dead connection in a busy
+//! loop, logging "Broken pipe" tens of thousands of times a second and never
+//! reaching `Action::Shutdown`, so the join timed out.
 //!
 //! The `window` variant quits while iced_winit is still handling the
 //! window's creation: the instance finishes inside a nested
@@ -49,6 +62,20 @@ const CHILD_ENV: &str = "EXIT_TEARDOWN_CHILD";
 const EXIT_THREAD_LEFT: i32 = 3;
 const EXIT_NO_POPUP: i32 = 4;
 const EXIT_RUN_FAILED: i32 = 5;
+const EXIT_NO_SCTK_THREAD: i32 = 6;
+
+/// `lost`: the child writes this file when it is up, and the parent then
+/// kills the compositor.
+const READY_ENV: &str = "EXIT_TEARDOWN_READY";
+/// `lost`: how long the child may take to end once the compositor is killed.
+const LOST_EXIT_BOUND: Duration = Duration::from_secs(10);
+/// `lost`: how many stderr lines from the SCTK thread may report the dead
+/// connection.
+const LOST_MAX_SCTK_ERROR_LINES: usize = 2;
+/// `lost`: how many stderr lines in all may report the dead connection.
+const LOST_MAX_ERROR_LINES: usize = 20;
+/// The log target of the SCTK thread's loop.
+const SCTK_TARGET: &str = "iced_winit::platform_specific::wayland::event_loop:";
 
 /// Set by the popup's view function, so a popup that never got built fails
 /// the popup variant instead of passing without testing anything.
@@ -59,6 +86,7 @@ fn main() {
         Ok("plain") => child(Variant::Plain),
         Ok("popup") => child(Variant::Popup),
         Ok("window") => child(Variant::Window),
+        Ok("lost") => child(Variant::Lost),
         Ok(other) => panic!("unknown {CHILD_ENV} value {other:?}"),
         Err(_) => parent(),
     }
@@ -85,6 +113,8 @@ enum Variant {
     /// window; one window opened with `window::open`, closed as soon as it
     /// has opened, and `iced::exit()` when it is gone.
     Window,
+    /// Does not quit: the compositor is killed under it.
+    Lost,
 }
 
 struct App {
@@ -145,6 +175,12 @@ impl Application for App {
             Message::Tick => {
                 let with_popup = self.variant == Variant::Popup;
                 self.ticks += 1;
+                if self.variant == Variant::Lost {
+                    if self.ticks == 3 {
+                        signal_ready();
+                    }
+                    return Task::none();
+                }
                 // The popup variant gets more time to be built and shown.
                 let quit_at = if with_popup { 8 } else { 3 };
                 if self.ticks >= quit_at {
@@ -206,6 +242,17 @@ impl App {
     }
 }
 
+/// `lost`: tells the parent that the application is up, with its SCTK
+/// thread running, so that the compositor can be killed.
+fn signal_ready() {
+    if sctk_threads().is_empty() {
+        eprintln!("no ct-wayland thread is running, so this run would test nothing");
+        std::process::exit(EXIT_NO_SCTK_THREAD);
+    }
+    let path = std::env::var(READY_ENV).expect("EXIT_TEARDOWN_READY");
+    std::fs::write(path, b"ready").expect("write the ready file");
+}
+
 struct StderrLogger;
 
 impl log::Log for StderrLogger {
@@ -240,13 +287,18 @@ fn child(variant: Variant) -> ! {
 
     let settings = match variant {
         Variant::Window => Settings::default().no_main_window(true).exit_on_close(false),
-        Variant::Plain | Variant::Popup => Settings::default(),
+        Variant::Plain | Variant::Popup | Variant::Lost => Settings::default(),
     };
     let result = cosmic::app::run::<App>(settings, variant);
     // `run` has returned: winit's event loop, and the display, are gone.
-    if let Err(err) = result {
-        eprintln!("run failed: {err}");
-        std::process::exit(EXIT_RUN_FAILED);
+    match result {
+        // With the compositor gone, an error is the expected way to end.
+        Err(err) if variant == Variant::Lost => eprintln!("run ended with: {err}"),
+        Err(err) => {
+            eprintln!("run failed: {err}");
+            std::process::exit(EXIT_RUN_FAILED);
+        }
+        Ok(()) => {}
     }
     let threads = sctk_threads();
     if !threads.is_empty() {
@@ -321,7 +373,7 @@ fn start_weston(runtime_dir: &Path, socket: &str) -> Weston {
     );
 }
 
-fn run_child(variant: &str, env: &[(String, String)], timeout: Duration) -> (String, std::process::ExitStatus) {
+fn spawn_child(variant: &str, env: &[(String, String)]) -> (Child, std::thread::JoinHandle<String>) {
     let exe = std::env::current_exe().expect("current_exe");
     let mut command = Command::new(exe);
     command
@@ -336,24 +388,126 @@ fn run_child(variant: &str, env: &[(String, String)], timeout: Duration) -> (Str
     let mut child = command.spawn().expect("start the child");
     let mut stderr = child.stderr.take().unwrap();
     let reader = std::thread::spawn(move || {
-        let mut text = String::new();
-        std::io::Read::read_to_string(&mut stderr, &mut text).ok();
-        text
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut stderr, &mut bytes).ok();
+        String::from_utf8_lossy(&bytes).into_owned()
     });
+    (child, reader)
+}
+
+/// Waits for the child to exit, or kills it after `timeout`: `None`.
+fn wait_child(child: &mut Child, timeout: Duration) -> Option<std::process::ExitStatus> {
     let start = std::time::Instant::now();
-    let status = loop {
+    loop {
         if let Some(status) = child.try_wait().unwrap() {
-            break status;
+            return Some(status);
         }
         if start.elapsed() > timeout {
             _ = child.kill();
             child.wait().unwrap();
-            let text = reader.join().unwrap();
-            panic!("the {variant} child did not exit within {timeout:?}; stderr:\n{text}");
+            return None;
         }
         std::thread::sleep(Duration::from_millis(20));
-    };
-    (reader.join().unwrap(), status)
+    }
+}
+
+fn run_child(variant: &str, env: &[(String, String)], timeout: Duration) -> (String, std::process::ExitStatus) {
+    let (mut child, reader) = spawn_child(variant, env);
+    let status = wait_child(&mut child, timeout);
+    let text = reader.join().unwrap();
+    match status {
+        Some(status) => (text, status),
+        None => panic!("the {variant} child did not exit within {timeout:?}; stderr:\n{text}"),
+    }
+}
+
+/// What a `lost` run saw.
+struct LostRun {
+    stderr: String,
+    /// `None`: still running `LOST_EXIT_BOUND` after the kill (then killed).
+    status: Option<std::process::ExitStatus>,
+    /// From killing the compositor to the child's exit.
+    took: Duration,
+}
+
+/// One `lost` run: its own weston, killed once the child is up.
+fn run_lost_child(scratch: &Path, run: usize, base_env: &[(String, String)]) -> LostRun {
+    let runtime_dir = scratch.join(format!("lost-runtime-{run}"));
+    std::fs::create_dir(&runtime_dir).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let socket = "wayland-exit-teardown-lost";
+    let mut weston = start_weston(&runtime_dir, socket);
+    let ready = runtime_dir.join("ready");
+    let mut env: Vec<(String, String)> = base_env
+        .iter()
+        .filter(|(key, _)| key != "WAYLAND_DISPLAY" && key != "XDG_RUNTIME_DIR")
+        .cloned()
+        .collect();
+    env.push(("WAYLAND_DISPLAY".into(), socket.into()));
+    env.push(("XDG_RUNTIME_DIR".into(), runtime_dir.display().to_string()));
+    env.push((READY_ENV.into(), ready.display().to_string()));
+
+    let (mut child, reader) = spawn_child("lost", &env);
+    let start = std::time::Instant::now();
+    while !ready.exists() {
+        if let Some(status) = child.try_wait().unwrap() {
+            let text = reader.join().unwrap();
+            panic!("the lost child exited ({status}) before it was up; stderr:\n{text}");
+        }
+        if start.elapsed() > Duration::from_secs(60) {
+            _ = child.kill();
+            child.wait().unwrap();
+            let text = reader.join().unwrap();
+            panic!("the lost child was not up within 60 s; stderr:\n{text}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // The compositor goes away: SIGKILL, as in a crash.
+    _ = weston.child.kill();
+    _ = weston.child.wait();
+    let killed = std::time::Instant::now();
+    let status = wait_child(&mut child, LOST_EXIT_BOUND);
+    let took = killed.elapsed();
+    LostRun {
+        stderr: reader.join().unwrap(),
+        status,
+        took,
+    }
+}
+
+/// Lines that report the dead connection: in all, and from the SCTK thread.
+fn connection_error_lines(stderr: &str) -> (usize, usize) {
+    let lines: Vec<&str> = stderr
+        .lines()
+        .filter(|line| {
+            line.contains("Broken pipe")
+                || line.contains("Connection reset")
+                || line.contains("dispatch error")
+                || line.contains("connection lost")
+                || line.contains("flush the wayland display")
+                || line.contains("Protocol error")
+        })
+        .collect();
+    let sctk = lines.iter().filter(|line| line.contains(SCTK_TARGET)).count();
+    (lines.len(), sctk)
+}
+
+/// The first and last few lines of a possibly huge stderr.
+fn abridged(stderr: &str) -> String {
+    let lines: Vec<&str> = stderr.trim_end().lines().collect();
+    if lines.len() <= 40 {
+        return lines.join("\n");
+    }
+    format!(
+        "{}\n[... {} lines left out ...]\n{}",
+        lines[..20].join("\n"),
+        lines.len() - 40,
+        lines[lines.len() - 20..].join("\n")
+    )
 }
 
 fn parent() {
@@ -410,12 +564,49 @@ fn parent() {
     // EXIT_TEARDOWN_VARIANTS=window,plain runs only those.
     let variants: Vec<String> = std::env::var("EXIT_TEARDOWN_VARIANTS")
         .map(|list| list.split(',').map(str::to_owned).collect())
-        .unwrap_or_else(|_| ["plain", "popup", "window"].map(str::to_owned).to_vec());
+        .unwrap_or_else(|_| ["plain", "popup", "window", "lost"].map(str::to_owned).to_vec());
     for variant in variants.iter().map(String::as_str) {
         let mut ok = 0;
+        // `lost`: the slowest exit after the kill, and the most error lines.
+        let mut slowest = Duration::ZERO;
+        let mut most_errors = 0;
+        let mut most_sctk_errors = 0;
         for run in 1..=runs {
-            let (stderr, status) = run_child(variant, &env, Duration::from_secs(60));
             let mut problems = Vec::new();
+            let (stderr, status) = if variant == "lost" {
+                let lost = run_lost_child(scratch.path(), run, &env);
+                slowest = slowest.max(lost.took);
+                let (errors, sctk_errors) = connection_error_lines(&lost.stderr);
+                most_errors = most_errors.max(errors);
+                most_sctk_errors = most_sctk_errors.max(sctk_errors);
+                if sctk_errors > LOST_MAX_SCTK_ERROR_LINES {
+                    problems.push(format!(
+                        "{sctk_errors} lines from the SCTK thread report the dead connection \
+                         (at most {LOST_MAX_SCTK_ERROR_LINES})"
+                    ));
+                }
+                if errors > LOST_MAX_ERROR_LINES {
+                    problems.push(format!(
+                        "{errors} lines in all report the dead connection (at most {LOST_MAX_ERROR_LINES})"
+                    ));
+                }
+                match lost.status {
+                    Some(status) => (lost.stderr, status),
+                    None => {
+                        problems.push(format!(
+                            "still running {LOST_EXIT_BOUND:?} after the compositor was killed"
+                        ));
+                        failures.push(format!(
+                            "{variant} run {run}: {}\n--- child stderr ---\n{}",
+                            problems.join("; "),
+                            abridged(&lost.stderr)
+                        ));
+                        continue;
+                    }
+                }
+            } else {
+                run_child(variant, &env, Duration::from_secs(60))
+            };
             if let Some(signal) = status.signal() {
                 problems.push(format!("killed by signal {signal}"));
             } else if status.code() != Some(0) {
@@ -426,6 +617,7 @@ fn parent() {
                         Some(EXIT_THREAD_LEFT) => "a ct-wayland thread outlived run",
                         Some(EXIT_NO_POPUP) => "the popup was never drawn",
                         Some(EXIT_RUN_FAILED) => "run failed",
+                        Some(EXIT_NO_SCTK_THREAD) => "no SCTK thread was running",
                         Some(101) => "a panic",
                         _ => "unexpected",
                     }
@@ -440,12 +632,20 @@ fn parent() {
                 failures.push(format!(
                     "{variant} run {run}: {}\n--- child stderr ---\n{}",
                     problems.join("; "),
-                    stderr.trim_end()
+                    abridged(&stderr)
                 ));
             }
         }
+        let lost_detail = if variant == "lost" {
+            format!(
+                "; slowest exit {slowest:.2?} after the kill; at most {most_sctk_errors} error \
+                 lines from the SCTK thread, {most_errors} in all"
+            )
+        } else {
+            String::new()
+        };
         println!(
-            "test exit_teardown::{variant} ... {} ({ok}/{runs} clean exits)",
+            "test exit_teardown::{variant} ... {} ({ok}/{runs} clean exits{lost_detail})",
             if ok == runs { "ok" } else { "FAILED" }
         );
         passed += usize::from(ok == runs);
