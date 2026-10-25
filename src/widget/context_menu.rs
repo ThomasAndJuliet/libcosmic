@@ -716,6 +716,130 @@ pub struct LocalState<Message> {
     reshape: bool,
 }
 
+/// An open context menu whose items change under it (the application
+/// builds them from state that changed while it was open) stays whole:
+/// no index past the end of a shorter menu, and every item in its own
+/// slot, as if the menu had been opened so.
+#[cfg(test)]
+mod open_menu_change_tests {
+    use super::*;
+    use iced::advanced::renderer::Headless;
+    use iced_core::renderer::Style;
+    use iced_core::{Color, clipboard};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    #[derive(Clone, Debug)]
+    struct Pick;
+
+    const AT: Point = Point::new(60.0, 40.0);
+    const SIZE: Size = Size::new(420.0, 900.0);
+
+    fn renderer() -> crate::Renderer {
+        iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
+            iced::Font::default(),
+            iced::Pixels(14.0),
+            Some("tiny-skia"),
+        ))
+        .expect("a headless renderer")
+    }
+
+    /// `n` items, item `divider` (if any) a divider
+    fn page(n: usize, divider: Option<usize>) -> crate::Element<'static, Pick> {
+        let items = (0..n)
+            .map(|i| {
+                if Some(i) == divider {
+                    menu::Tree::new(crate::Element::from(crate::widget::divider::horizontal::default()))
+                } else {
+                    menu::Tree::new(crate::Element::from(
+                        crate::widget::button::text(format!("Item {i}")).on_press(Pick),
+                    ))
+                }
+            })
+            .collect();
+        let content = crate::widget::container(crate::widget::Space::new())
+            .width(Length::Fill)
+            .height(Length::Fill);
+        // The overlay path: no native popup
+        crate::Element::from(context_menu(content, Some(items)).window_id(window::Id::NONE))
+    }
+
+    /// Frames of `pages`, each with its events, the pointer at the click;
+    /// the last frame's pixels
+    fn frames(pages: Vec<(crate::Element<'static, Pick>, Vec<Event>)>) -> Vec<u8> {
+        let mut renderer = renderer();
+        let mut cache = Cache::default();
+        let cursor = mouse::Cursor::Available(AT);
+        let theme = crate::Theme::light();
+        let mut pixels = Vec::new();
+        for (element, mut events) in pages {
+            let mut ui = UserInterface::build(element, SIZE, std::mem::take(&mut cache), &mut renderer);
+            events.push(Event::Window(window::Event::RedrawRequested(std::time::Instant::now())));
+            for event in events {
+                let _ = ui.update(&[event], cursor, &mut renderer, &mut clipboard::Null, &mut Vec::new());
+            }
+            ui.draw(&mut renderer, &theme, &Style { icon_color: Color::BLACK, text_color: Color::BLACK, scale_factor: 1.0 }, cursor);
+            pixels = renderer.screenshot(Size::new(SIZE.width as u32, SIZE.height as u32), 1.0, Color::WHITE);
+            cache = ui.into_cache();
+        }
+        pixels
+    }
+
+    fn open() -> Vec<Event> {
+        vec![
+            Event::Mouse(mouse::Event::CursorMoved { position: AT }),
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)),
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Right)),
+        ]
+    }
+
+    /// Opened as `(n, divider)`, then shown as `then` for two frames
+    fn changed(first: (usize, Option<usize>), then: (usize, Option<usize>)) -> Vec<u8> {
+        frames(vec![
+            (page(first.0, first.1), open()),
+            (page(first.0, first.1), vec![]),
+            (page(then.0, then.1), vec![]),
+            (page(then.0, then.1), vec![]),
+        ])
+    }
+
+    /// Opened as `then` itself, in as many frames
+    fn fresh(then: (usize, Option<usize>)) -> Vec<u8> {
+        frames(vec![
+            (page(then.0, then.1), open()),
+            (page(then.0, then.1), vec![]),
+            (page(then.0, then.1), vec![]),
+            (page(then.0, then.1), vec![]),
+        ])
+    }
+
+    fn differing(a: &[u8], b: &[u8]) -> usize {
+        a.chunks(4).zip(b.chunks(4)).filter(|(p, q)| p != q).count()
+    }
+
+    #[test]
+    fn the_menu_opens() {
+        let closed = frames(vec![(page(5, None), vec![])]);
+        assert!(differing(&fresh((5, None)), &closed) > 1000);
+    }
+
+    #[test]
+    fn a_menu_that_loses_an_item_while_open_does_not_panic_and_is_drawn_whole() {
+        assert_eq!(differing(&changed((18, None), (17, None)), &fresh((17, None))), 0);
+        // Down to one item
+        assert_eq!(differing(&changed((18, None), (1, None)), &fresh((1, None))), 0);
+    }
+
+    #[test]
+    fn a_menu_that_gains_an_item_while_open_shows_it() {
+        assert_eq!(differing(&changed((17, None), (18, None)), &fresh((18, None))), 0);
+    }
+
+    #[test]
+    fn an_item_that_changes_kind_while_open_takes_its_own_slot() {
+        assert_eq!(differing(&changed((10, None), (10, Some(3))), &fresh((10, Some(3)))), 0);
+    }
+}
+
 #[cfg(all(test, wayland_platform))]
 mod tests {
     use super::*;
