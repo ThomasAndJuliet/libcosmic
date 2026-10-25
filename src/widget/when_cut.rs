@@ -101,6 +101,9 @@ impl<'a, Message: 'a> Widget<Message, Theme, Renderer> for WhenCut<'a, Message> 
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
+        // Text that is not cut has no tooltip to open: the content does not
+        // see the pointer, so its tooltip stays idle and asks for no layout
+        let cursor = if tree.state.downcast_ref::<State>().cut { cursor } else { mouse::Cursor::Unavailable };
         self.content.as_widget_mut().update(&mut tree.children[0], event, layout, cursor, renderer, clipboard, shell, viewport);
     }
 
