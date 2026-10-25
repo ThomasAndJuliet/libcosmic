@@ -53,7 +53,8 @@ jobs:
 
       # Quitting must not segfault or leave the SCTK thread behind. The test
       # starts its own headless weston (hence the package above) and runs
-      # a minimal application against it 20 times, with and without a popup.
+      # a minimal application against it 20 times, with and without a popup,
+      # and with its own weston killed under it (the compositor goes away).
       # It fails, and does not skip, if weston is missing.
       - name: Quitting an application, under a headless weston
         run: cargo test --no-default-features --features winit,wayland,tokio,multi-window --test exit_teardown

@@ -49,7 +49,7 @@ This replaces a vendored `libcosmic/` subtree and a vendored `patches/winit-wayl
 Each commit says where it came from, using an `Origin:` line or a household-ui proposal number.
 
 - **winit:** drop pointer events for a released pointer; this fixes the "failed to get pointer data" panic.
-- **iced_winit:** the SCTK thread is stopped and joined before winit's event loop disconnects the display; this fixes the segfault in libwayland when an app exits. A finished instance is never polled again, which fixes the "`async fn` resumed after completion" panic when an app quits while a window is being created.
+- **iced_winit:** the SCTK thread is stopped and joined before winit's event loop disconnects the display; this fixes the segfault in libwayland when an app exits. A finished instance is never polled again, which fixes the "`async fn` resumed after completion" panic when an app quits while a window is being created. When the compositor goes away, the SCTK thread stops on the dead connection and logs it once, instead of dispatching it in a busy loop until the join times out.
 - **toaster:** progress, persistent toasts, and updating a toast in place.
 - **popover:**
   - `Position::BelowAt`;
@@ -147,7 +147,7 @@ Changes Tom's cosmic-term sessions made to its vendored copy. Each commit has an
 - libcosmic's library tests;
 - a check with the apps' feature set;
 - the popup lifecycle and menu-model tests that used to run in cosmic-term's CI;
-- `tests/exit_teardown.rs`: a minimal app quits under a headless weston, with and without a popup, and must exit 0 with no SCTK thread left (needs `weston`; fails without it);
+- `tests/exit_teardown.rs`: a minimal app quits under a headless weston, with and without a popup, and must exit 0 with no SCTK thread left; when its compositor is killed under it, it must end within 10 s, with the SCTK thread joined after reporting the dead connection in at most 2 lines (needs `weston`; fails without it);
 - cosmic-theme's tests;
 - iced's renderer failure tests and SVG tests;
 - a check of winit's Wayland backend.
