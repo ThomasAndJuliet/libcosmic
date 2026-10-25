@@ -109,6 +109,7 @@ Each commit carries the number of the household-ui proposal it answers, or an `I
 - **menus:**
   - the menu bar diffs its roots' own trees, which fixes a panic when the roots change kind (#24);
   - the press that closes a menu is swallowed, for both in-window and native popups (#17).
+  - an open menu whose items change under it takes its items' slots again from the tree it shows: a shorter menu no longer indexes past its end (a panic in Lollypop, 25 Oct), and a longer one, or one whose items changed kind, is no longer drawn in the old slots; a submenu whose item is gone closes.
 - **cosmic-theme:**
   - a partially saved theme is filled from its own mode's defaults;
   - a never-saved light theme gives the built-in light theme;

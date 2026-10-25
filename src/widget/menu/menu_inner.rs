@@ -296,6 +296,40 @@ impl MenuBounds {
             offset_bounds,
         }
     }
+
+    /// Takes the item slots again from `menu_tree`, the menu this level
+    /// shows now, keeping where the menu stands: its items may have changed
+    /// while it was open (the application builds the menu from state that
+    /// changed, such as a track menu losing its "Stop after" when the track
+    /// leaves the playlist). The slots measured when it opened would index
+    /// past the end of a shorter menu, and lay a longer one, or one whose
+    /// items changed kind, out of place.
+    #[allow(clippy::too_many_arguments)]
+    fn refresh<Message>(
+        &mut self,
+        menu_tree: &MenuTree<Message>,
+        renderer: &crate::Renderer,
+        item_width: ItemWidth,
+        item_height: ItemHeight,
+        bounds_expand: u16,
+        tree: &mut [Tree],
+    ) {
+        let (children_size, child_positions, child_sizes) =
+            get_children_layout(menu_tree, renderer, item_width, item_height, tree);
+        if child_positions == self.child_positions && child_sizes == self.child_sizes {
+            return;
+        }
+        // The gap beside the menu (towards its parent) follows its height
+        // when it lies beside it
+        if (self.offset_bounds.height - self.children_bounds.height).abs() < 0.5 {
+            self.offset_bounds.height = children_size.height;
+        }
+        self.child_positions = child_positions;
+        self.child_sizes = child_sizes;
+        self.children_bounds.width = children_size.width;
+        self.children_bounds.height = children_size.height;
+        self.check_bounds = pad_rectangle(self.children_bounds, bounds_expand.into());
+    }
 }
 
 #[derive(Clone)]
@@ -462,6 +496,59 @@ impl<'b, Message: Clone + 'static> Menu<'b, Message> {
         overlay::Element::new(Box::new(self))
     }
 
+    /// Brings the open menu levels in line with the menu tree this menu
+    /// shows now, which may have changed while they were open: each level
+    /// takes its item slots again ([`MenuBounds::refresh`]); a hovered
+    /// item past the end of its level is no longer hovered; a submenu
+    /// whose item is gone, or is no longer a folder, closes with the levels
+    /// below it; and when the root itself is gone the menu closes.
+    fn reconcile(
+        &self,
+        data: &mut super::menu_bar::MenuBarStateInner,
+        renderer: &crate::Renderer,
+    ) {
+        let Some(&root) = data.active_root.first() else {
+            return;
+        };
+        let (Some(root_tree), Some(item_trees)) = (
+            self.menu_roots.get(root),
+            data.tree.children.get_mut(root).map(|t| &mut t.children),
+        ) else {
+            data.reset();
+            return;
+        };
+        let levels = data.menu_states.len().min(data.active_root.len());
+        let mut parent = root_tree;
+        for level in 0..levels {
+            if level > 0 {
+                match parent.children.get(data.active_root[level]) {
+                    Some(item) if !item.children.is_empty() => parent = item,
+                    _ => {
+                        data.menu_states.truncate(level);
+                        data.active_root.truncate(level);
+                        return;
+                    }
+                }
+            }
+            if parent.children.is_empty() {
+                data.reset();
+                return;
+            }
+            let ms = &mut data.menu_states[level];
+            ms.menu_bounds.refresh(
+                parent,
+                renderer,
+                self.item_width,
+                self.item_height,
+                self.bounds_expand,
+                item_trees,
+            );
+            if ms.index.is_some_and(|i| i >= parent.children.len()) {
+                ms.index = None;
+            }
+        }
+    }
+
     pub(crate) fn layout(&self, renderer: &crate::Renderer, limits: Limits) -> Node {
         if !self.tree.is_current() {
             return Node::new(limits.min());
@@ -472,6 +559,7 @@ impl<'b, Message: Clone + 'static> Menu<'b, Message> {
 
         let empty = Vec::new();
         self.tree.inner.with_data_mut(|data| {
+            self.reconcile(data, renderer);
             if data.active_root.len() < self.depth + 1 || data.menu_states.len() < self.depth + 1 {
                 return Node::new(limits.min());
             }
