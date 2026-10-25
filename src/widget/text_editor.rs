@@ -46,7 +46,7 @@ impl<'a, Message: Clone + 'static> TextEditor<'a, Message> {
             inner: iced_widget::text_editor(content)
                 .selection_fill(|theme: &crate::Theme, style| solid_fill(theme, style))
                 .selected_text_color(|theme: &crate::Theme, style| {
-                    selection::on_solid(style.value, solid_fill(theme, style))
+                    selection::on_solid(style.value, solid_fill(theme, style), theme.cosmic().accent.on.into())
                 }),
             has_context_menu: true,
             window_id: crate::widget::text_context_menu::current_window_id(),

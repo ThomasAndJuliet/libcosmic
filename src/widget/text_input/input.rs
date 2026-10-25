@@ -2965,9 +2965,11 @@ pub fn draw<'a, Message>(
         // the fill goes in the quad's own layer: drawn in this one it would
         // lie under the first pass, whose glyphs would fringe the new ones.
         // The selected text is drawn by the fill rule, on a solid fill
-        // (household-ui RULES.md rule 6: text boxes are short writing).
+        // (household-ui RULES.md rule 6: text boxes are short writing), its
+        // greys going to the theme's on colour for the selection.
         if is_selecting {
-            let selected_text_color = crate::theme::selection::on_solid(color, selection_fill);
+            let selected_text_color =
+                crate::theme::selection::on_solid(color, selection_fill, appearance.selected_text_color);
             for (quad, fill) in &cursors {
                 let quad = renderer::Quad {
                     bounds: quad.bounds + shift,

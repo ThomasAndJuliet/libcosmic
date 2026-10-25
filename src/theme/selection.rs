@@ -23,9 +23,11 @@ pub(crate) fn opaque_over(top: Color, beneath: Color) -> Color {
     with_alpha(household_tones::over(top, beneath).rgb(), 1.0)
 }
 
-/// What `text` is drawn in on the opaque solid `fill`, keeping its alpha
-pub(crate) fn on_solid(text: Color, fill: Color) -> Color {
-    with_alpha(household_tones::on_solid(rgb(text), rgb(fill)), text.a)
+/// What `text` is drawn in on the opaque solid `fill`, greys going to `on`,
+/// the theme's on colour for the fill (COSMIC's own, kept), keeping its
+/// alpha
+pub(crate) fn on_solid(text: Color, fill: Color, on: Color) -> Color {
+    with_alpha(household_tones::on_fill(rgb(text), rgb(fill), rgb(on)), text.a)
 }
 
 /// The selection tint of `accent` as it shows over `beneath`, opaque
@@ -65,7 +67,7 @@ mod tests {
     fn grey_text_in_a_text_box_is_selected_in_white() {
         let fill = opaque_over(hex(0x7f2400), hex(0xf5f5f5));
         for grey in [0x222222, 0x555555] {
-            let got = on_solid(hex(grey), fill);
+            let got = on_solid(hex(grey), fill, Color::WHITE);
             assert!(off(got, Color::WHITE) <= 2, "#{grey:06x} came out {got:?}");
         }
     }
@@ -74,7 +76,7 @@ mod tests {
     /// 25 Oct)
     #[test]
     fn coloured_text_keeps_its_hue_on_the_solid_fill() {
-        let got = on_solid(hex(0xc01c28), hex(0x7f2400));
+        let got = on_solid(hex(0xc01c28), hex(0x7f2400), Color::WHITE);
         assert!(off(got, hex(0xff7f78)) <= 2, "came out {got:?}");
     }
 
@@ -115,7 +117,7 @@ mod tests {
             a: 0.5,
             ..hex(0x222222)
         };
-        assert_eq!(on_solid(text, hex(0x7f2400)).a, 0.5);
+        assert_eq!(on_solid(text, hex(0x7f2400), Color::WHITE).a, 0.5);
         assert_eq!(
             on_tint(text, hex(0x7f2400), hex(0xebebeb), hex(0x222222)).a,
             0.5
