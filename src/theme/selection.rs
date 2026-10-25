@@ -146,6 +146,12 @@ mod render {
         Theme::custom(Arc::new(theme))
     }
 
+    /// `colour` as the 0xRRGGBB the checks take
+    fn rgb(colour: impl Into<Color>) -> u32 {
+        let [r, g, b, _] = colour.into().into_rgba8();
+        u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)
+    }
+
     /// Lets `prepare` act on the widget tree, lays `element` out, focuses
     /// `id`, draws it and returns the RGBA pixels
     fn render(mut element: Element<'_, ()>, id: &Id, prepare: impl FnOnce(&mut Tree)) -> Vec<u8> {
@@ -260,13 +266,14 @@ mod render {
             .style(text_editor_style)
     }
 
-    /// A text editor's selection is a solid accent with white text, and the
-    /// unselected grey text does not show under it (rule 6, Juliet, 25 Oct)
+    /// A text editor's selection is a solid accent with the theme's own on
+    /// colour (`accent.on`) for text, and the unselected grey text does not
+    /// show under it (rule 6, Juliet, 25 Oct)
     #[test]
     fn text_editor_selection_covers_the_unselected_text() {
         let (id, content) = (Id::unique(), selected_content());
         let pixels = render(selected_editor(&content, &id).into(), &id, |_| {});
-        assert_only_fill_and_text(&pixels, 0x7f2400, 0xffffff);
+        assert_only_fill_and_text(&pixels, 0x7f2400, rgb(theme().cosmic().accent.on));
     }
 
     /// With `selection_tint` the fill is the opaque tint, #c8aba0 over
@@ -283,8 +290,9 @@ mod render {
         assert_only_fill_and_text(&pixels, 0xc8aba0, 0x222222);
     }
 
-    /// A text input's selection is a solid accent with white text, and the
-    /// unselected text does not show under it (rule 6, Juliet, 25 Oct)
+    /// A text input's selection is a solid accent with the theme's on-accent
+    /// colour for text, and the unselected text does not show under it
+    /// (rule 6, Juliet, 25 Oct)
     #[test]
     fn text_input_selection_covers_the_unselected_text() {
         let id = Id::unique();
@@ -296,6 +304,6 @@ mod render {
             state.focus();
             state.select_all();
         });
-        assert_only_fill_and_text(&pixels, 0x7f2400, 0xffffff);
+        assert_only_fill_and_text(&pixels, 0x7f2400, rgb(theme().cosmic().on_accent_color()));
     }
 }
