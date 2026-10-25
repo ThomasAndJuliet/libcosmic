@@ -328,6 +328,8 @@ pub mod tooltip {
     use crate::Element;
 
     pub use iced::widget::tooltip::Position;
+    // A tooltip shown only when its text is cut off (household)
+    pub use super::when_cut::{WhenCut, when_cut};
 
     pub type Tooltip<'a, Message> =
         iced::widget::Tooltip<'a, Message, crate::Theme, crate::Renderer>;
@@ -347,6 +349,7 @@ pub mod tooltip {
 }
 
 pub mod warning;
+pub mod when_cut;
 #[doc(inline)]
 pub use warning::*;
 
