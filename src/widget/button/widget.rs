@@ -661,11 +661,12 @@ impl<'a, Message: 'a + Clone> Widget<Message, crate::Theme, crate::Renderer>
         layout: Layout<'b>,
         renderer: &crate::Renderer,
         viewport: &Rectangle,
-        mut translation: Vector,
+        translation: Vector,
     ) -> Option<overlay::Element<'b, Message, crate::Theme, crate::Renderer>> {
-        let position = layout.bounds().position();
-        translation.x += position.x;
-        translation.y += position.y;
+        // The content's layout is already where it is in the window: the
+        // translation is passed on as it came (as iced's containers do).
+        // Adding the button's own position to it put every overlay of the
+        // content (a tooltip on a row's title) a button's offset away.
         self.content.as_widget_mut().overlay(
             &mut tree.children[0],
             layout
@@ -1135,5 +1136,84 @@ fn removal_bounds(bounds: Rectangle, offset: f32) -> Rectangle {
         y: bounds.y - 12.0 + offset,
         width: 24.0,
         height: 24.0,
+    }
+}
+
+/// Overlays of a button's content (a tooltip on a row's title, a menu on
+/// a button inside it) are placed at the content's own position: a child's
+/// layout is already where it is in the window, and the translation handed
+/// down is what scrollables move it by, as iced's containers pass it on.
+#[cfg(test)]
+mod overlay_tests {
+    use crate::Element;
+    use iced::advanced::renderer::Headless;
+    use iced_core::renderer::Style;
+    use iced_core::{Color, Event, Length, Point, Rectangle, Size, clipboard, mouse};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    #[derive(Clone, Debug)]
+    struct Pressed;
+
+    const SIZE: Size = Size::new(500.0, 900.0);
+    /// The button's place: 300 px down and 40 across
+    const BUTTON: Rectangle = Rectangle { x: 40.0, y: 300.0, width: 300.0, height: 40.0 };
+
+    fn page() -> Element<'static, Pressed> {
+        let label = crate::widget::tooltip::tooltip(
+            crate::widget::text("A title in a row"),
+            crate::widget::container(crate::widget::text("Its tooltip")).padding(8),
+            crate::widget::tooltip::Position::Bottom,
+        );
+        let button = crate::widget::button::custom(label)
+            .width(Length::Fixed(BUTTON.width))
+            .height(Length::Fixed(BUTTON.height))
+            .on_press(Pressed);
+        crate::widget::container(button).padding([BUTTON.y, 0.0, 0.0, BUTTON.x]).into()
+    }
+
+    fn frame(at: Option<Point>) -> Vec<u8> {
+        let mut renderer = iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
+            iced::Font::default(),
+            iced::Pixels(14.0),
+            Some("tiny-skia"),
+        ))
+        .expect("a headless renderer");
+        let cursor = at.map_or(mouse::Cursor::Unavailable, mouse::Cursor::Available);
+        let mut cache = Cache::default();
+        let events = [
+            at.map(|position| Event::Mouse(mouse::Event::CursorMoved { position })),
+            Some(Event::Window(iced_core::window::Event::RedrawRequested(std::time::Instant::now()))),
+        ];
+        for event in events.into_iter().flatten() {
+            let mut ui = UserInterface::build(page(), SIZE, std::mem::take(&mut cache), &mut renderer);
+            let _ = ui.update(&[event], cursor, &mut renderer, &mut clipboard::Null, &mut Vec::new());
+            cache = ui.into_cache();
+        }
+        let mut ui = UserInterface::build(page(), SIZE, cache, &mut renderer);
+        let _ = ui.update(&[], cursor, &mut renderer, &mut clipboard::Null, &mut Vec::new());
+        ui.draw(&mut renderer, &crate::Theme::light(), &Style { icon_color: Color::BLACK, text_color: Color::BLACK, scale_factor: 1.0 }, cursor);
+        renderer.screenshot(Size::new(SIZE.width as u32, SIZE.height as u32), 1.0, Color::WHITE)
+    }
+
+    /// The bounding box of the pixels that differ outside the button
+    fn new_ink(a: &[u8], b: &[u8]) -> Option<Rectangle> {
+        let w = SIZE.width as usize;
+        let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
+        for (i, (p, q)) in a.chunks(4).zip(b.chunks(4)).enumerate() {
+            let (x, y) = (i % w, i / w);
+            if p != q && !BUTTON.contains(Point::new(x as f32, y as f32)) {
+                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+            }
+        }
+        (x0 <= x1).then(|| Rectangle::new(Point::new(x0 as f32, y0 as f32), Size::new((x1 - x0) as f32, (y1 - y0) as f32)))
+    }
+
+    #[test]
+    fn a_tooltip_in_a_buttons_content_opens_at_the_content() {
+        let over = Point::new(BUTTON.x + 20.0, BUTTON.y + 10.0);
+        let tip = new_ink(&frame(None), &frame(Some(over))).expect("the tooltip is drawn");
+        // Below the label (Position::Bottom), not a button's offset further
+        assert!(tip.y >= BUTTON.y && tip.y <= BUTTON.y + BUTTON.height + 8.0, "the tooltip's top {tip:?} is just below the label in {BUTTON:?}");
+        assert!(tip.x >= BUTTON.x - 8.0 && tip.x <= BUTTON.x + BUTTON.width, "and across from it: {tip:?}");
     }
 }
