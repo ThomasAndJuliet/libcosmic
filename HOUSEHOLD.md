@@ -157,6 +157,18 @@ Changes Tom's cosmic-term sessions made to its vendored copy. Each commit has an
 - **popover:** `Position::BelowAtWindow`.
 - **text_context_menu:** a second right-click replaces the popup, and a replaced surface no longer resets the widget.
 
+### Widget state reconciliation, 27 October
+
+Named children now move their retained trees to their new positions during
+reconciliation. Inserting a child before a named sibling keeps both children;
+removing an earlier sibling preserves the named child's state. Named state
+restoration checks the saved widget tag, and a duplicate name cannot reuse
+an empty placeholder left by extraction. Widget state downcast assertions
+remain intact.
+
+Run the focused regressions from `iced/` with
+`cargo test --locked -p iced_core --lib widget::tree -- --test-threads=1`.
+
 ## CI
 
 `.github/workflows/household.yml` runs on neo's `neo-ubuntu` runner for pushes to `household` and `fork/**` by Tom or Juliet; nothing runs on GitHub-hosted runners. Upstream's workflows are removed. It runs:
@@ -166,7 +178,7 @@ Changes Tom's cosmic-term sessions made to its vendored copy. Each commit has an
 - the popup lifecycle and menu-model tests that used to run in cosmic-term's CI;
 - `tests/exit_teardown.rs`: a minimal app quits under a headless weston, with and without a popup, and must exit 0 with no SCTK thread left; when its compositor is killed under it, it must end within 10 s, with the SCTK thread joined after reporting the dead connection in at most 2 lines (needs `weston`; fails without it);
 - cosmic-theme's tests;
-- iced's renderer failure tests and SVG tests;
+- iced's widget state reconciliation, renderer failure tests and SVG tests;
 - a check of winit's Wayland backend.
 
 Push a `fork/<topic>` branch to get a run before merging it into `household`.

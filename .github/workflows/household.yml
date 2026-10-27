@@ -69,6 +69,10 @@ jobs:
       - name: cosmic-theme
         run: cargo test -p cosmic-theme
 
+      - name: iced widget state reconciliation
+        working-directory: iced
+        run: cargo test --locked -p iced_core --lib
+
       - name: iced renderers
         working-directory: iced
         run: |

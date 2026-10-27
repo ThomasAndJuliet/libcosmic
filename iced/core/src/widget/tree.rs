@@ -9,7 +9,7 @@ use std::{fmt, mem};
 
 thread_local! {
     /// A map of named widget states.
-pub static NAMED: std::cell::RefCell<HashMap<Cow<'static, str>, (State, Vec<(usize, Tree)>)>> = std::cell::RefCell::new(HashMap::new());
+pub static NAMED: std::cell::RefCell<HashMap<Cow<'static, str>, (Tag, State, Vec<(usize, Tree)>)>> = std::cell::RefCell::new(HashMap::new());
 }
 
 /// A persistent state widget tree.
@@ -61,7 +61,7 @@ impl Tree {
     /// Takes all named widgets from the tree.
     pub fn take_all_named(
         &mut self,
-    ) -> HashMap<Cow<'static, str>, (State, Vec<(usize, Tree)>)> {
+    ) -> HashMap<Cow<'static, str>, (Tag, State, Vec<(usize, Tree)>)> {
         let mut named = HashMap::new();
         struct Visit {
             parent: Cow<'static, str>,
@@ -92,12 +92,12 @@ impl Tree {
                     });
                 _ = named.insert(
                     n.clone(),
-                    (state, Vec::with_capacity(children_count)),
+                    (tree.tag, state, Vec::with_capacity(children_count)),
                 );
                 stack.extend(children);
             } else if let Some(visit) = visit {
                 if visit.visited {
-                    named.get_mut(&visit.parent).unwrap().1.push((
+                    named.get_mut(&visit.parent).unwrap().2.push((
                         visit.index,
                         mem::replace(
                             tree,
@@ -168,14 +168,21 @@ impl Tree {
 
         if tag_match {
             if let Some(Id(Internal::Custom(_, n))) = borrowed.id() {
-                if let Some((mut state, children)) = NAMED
+                if let Some((saved_tag, mut state, children)) = NAMED
                     .with(|named| named.borrow_mut().remove(&n))
                     .or_else(|| {
                         //check self.id
                         if let Some(Id(Internal::Custom(_, ref name))) = self.id
                         {
-                            if name == &n {
+                            // Extraction leaves an empty placeholder. If
+                            // a duplicate name consumed the retained state,
+                            // rebuild this occurrence instead of reusing it.
+                            if name == &n
+                                && !(self.tag != Tag::stateless()
+                                    && matches!(self.state, State::None))
+                            {
                                 Some((
+                                    self.tag,
                                     mem::replace(&mut self.state, State::None),
                                     self.children
                                         .iter_mut()
@@ -201,6 +208,13 @@ impl Tree {
                         }
                     })
                 {
+                    // A name identifies a widget across moves, but its
+                    // retained state is valid only for the same widget tag.
+                    if saved_tag != self.tag {
+                        *self = Self::new(&*borrowed);
+                        borrowed.diff(self);
+                        return;
+                    }
                     std::mem::swap(&mut self.state, &mut state);
                     let widget_children = borrowed.children();
                     if !tag_match {
@@ -286,75 +300,49 @@ impl Tree {
         diff: impl Fn(&mut Tree, &mut T),
         new_state: impl Fn(&T) -> Self,
     ) {
-        if self.children.len() > new_children.len() {
-            self.children.truncate(new_children.len());
-        }
-
-        let children_len = self.children.len();
-        let (mut id_map, mut id_list): (
-            HashMap<String, &mut Tree>,
-            VecDeque<(usize, &mut Tree)>,
-        ) = self.children.iter_mut().enumerate().fold(
-            (HashMap::new(), VecDeque::with_capacity(children_len)),
-            |(mut id_map, mut id_list), (i, c)| {
-                if let Some(id) = c.id.as_ref() {
-                    if let Internal::Custom(_, ref name) = id.0 {
-                        let _ = id_map.insert(name.to_string(), c);
-                    } else {
-                        id_list.push_back((i, c));
-                    }
-                } else {
-                    id_list.push_back((i, c));
-                }
-                (id_map, id_list)
-            },
-        );
-
-        let mut new_trees: Vec<(Tree, usize)> =
-            Vec::with_capacity(new_children.len());
-        for (i, (new, new_id)) in
-            new_children.iter_mut().zip(new_ids.iter()).enumerate()
-        {
-            let child_state = if let Some(c) = new_id.as_ref().and_then(|id| {
-                if let Internal::Custom(_, ref name) = id.0 {
-                    id_map.remove(name.as_ref())
-                } else {
-                    None
-                }
-            }) {
-                c
-            } else if let Some(i) = {
-                let mut found = None;
-                for c_i in 0..id_list.len() {
-                    if id_list[c_i].0 == i {
-                        found = Some(c_i);
-                        break;
-                    }
-                    if i < c_i {
-                        break;
-                    }
-                }
-                found
-            } {
-                let c = id_list.remove(i).unwrap().1;
-                c
-            } else {
-                let mut my_new_state = new_state(new);
-                diff(&mut my_new_state, new);
-                new_trees.push((my_new_state, i));
-                continue;
-            };
-
-            diff(child_state, new);
-        }
-
-        for (new_tree, i) in new_trees {
-            if self.children.len() > i {
-                self.children[i] = new_tree;
-            } else {
-                self.children.push(new_tree);
+        // Match first, then place each retained tree at the new index.
+        // Mutating the old slots in place leaves named siblings in their
+        // previous order, so layout can read another widget's state.
+        // Retain all old slots until matching finishes: truncating first
+        // would discard a named child that moved towards the beginning.
+        let mut old: Vec<Option<Tree>> = mem::take(&mut self.children)
+            .into_iter()
+            .map(Some)
+            .collect();
+        let mut named: HashMap<Cow<'static, str>, VecDeque<usize>> =
+            HashMap::new();
+        for (index, child) in old.iter().enumerate() {
+            if let Some(Id(Internal::Custom(_, name))) =
+                &child.as_ref().unwrap().id
+            {
+                named.entry(name.clone()).or_default().push_back(index);
             }
         }
+
+        self.children = new_children
+            .iter_mut()
+            .zip(new_ids)
+            .enumerate()
+            .map(|(index, (widget, id))| {
+                let named_index = match id {
+                    Some(Id(Internal::Custom(_, name))) => {
+                        named.get_mut(&name).and_then(VecDeque::pop_front)
+                    }
+                    _ => None,
+                };
+                let positional_index =
+                    old.get(index).and_then(Option::as_ref).and_then(|tree| {
+                        (!matches!(tree.id, Some(Id(Internal::Custom(_, _)))))
+                            .then_some(index)
+                    });
+                let mut tree = named_index
+                    .or(positional_index)
+                    .and_then(|index| old[index].take())
+                    .unwrap_or_else(|| new_state(widget));
+                diff(&mut tree, widget);
+                tree
+            })
+            .collect();
     }
 }
 
@@ -515,6 +503,250 @@ impl fmt::Debug for State {
         match self {
             Self::None => write!(f, "State::None"),
             Self::Some(_) => write!(f, "State::Some"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Element, Length, Rectangle, Size, layout, mouse, renderer};
+
+    struct TestRenderer;
+
+    impl renderer::Renderer for TestRenderer {
+        fn start_layer(&mut self, _: Rectangle) {}
+        fn end_layer(&mut self) {}
+        fn start_transformation(&mut self, _: crate::Transformation) {}
+        fn end_transformation(&mut self) {}
+        fn reset(&mut self, _: Rectangle) {}
+        fn fill_quad(
+            &mut self,
+            _: renderer::Quad,
+            _: impl Into<crate::Background>,
+        ) {
+        }
+        fn allocate_image(
+            &mut self,
+            _: &crate::image::Handle,
+            _: impl FnOnce(Result<crate::image::Allocation, crate::image::Error>)
+            + Send
+            + 'static,
+        ) {
+        }
+    }
+
+    struct Control {
+        name: Option<&'static str>,
+        value: Option<u32>,
+        children: Vec<Element<'static, (), (), TestRenderer>>,
+    }
+
+    impl Control {
+        fn leaf(name: Option<&'static str>, value: Option<u32>) -> Self {
+            Self {
+                name,
+                value,
+                children: Vec::new(),
+            }
+        }
+
+        fn row(children: Vec<Self>) -> Self {
+            Self {
+                name: None,
+                value: None,
+                children: children.into_iter().map(Element::new).collect(),
+            }
+        }
+    }
+
+    impl Widget<(), (), TestRenderer> for Control {
+        fn id(&self) -> Option<Id> {
+            self.name.map(Id::new)
+        }
+        fn tag(&self) -> Tag {
+            if self.value.is_some() {
+                Tag::of::<u32>()
+            } else {
+                Tag::stateless()
+            }
+        }
+        fn state(&self) -> State {
+            self.value.map(State::new).unwrap_or(State::None)
+        }
+        fn children(&self) -> Vec<Tree> {
+            self.children.iter().map(Tree::new).collect()
+        }
+        fn diff(&mut self, tree: &mut Tree) {
+            tree.diff_children(&mut self.children);
+        }
+        fn size(&self) -> Size<Length> {
+            Size::new(Length::Shrink, Length::Shrink)
+        }
+        fn layout(
+            &mut self,
+            tree: &mut Tree,
+            renderer: &TestRenderer,
+            limits: &layout::Limits,
+        ) -> layout::Node {
+            // The consumer checks its state only after reconciliation, as
+            // text editors and controls do when laying out or drawing.
+            if self.value.is_some() {
+                let _ = tree.state.downcast_ref::<u32>();
+            }
+            assert_eq!(tree.children.len(), self.children.len());
+            let children = self
+                .children
+                .iter_mut()
+                .zip(&mut tree.children)
+                .map(|(widget, tree)| {
+                    widget.as_widget_mut().layout(tree, renderer, limits)
+                })
+                .collect();
+            layout::Node::with_children(Size::ZERO, children)
+        }
+        fn draw(
+            &self,
+            _: &Tree,
+            _: &mut TestRenderer,
+            _: &(),
+            _: &renderer::Style,
+            _: layout::Layout<'_>,
+            _: mouse::Cursor,
+            _: &Rectangle,
+        ) {
+        }
+    }
+
+    fn reconcile(mut tree: Tree, mut new: Control, extract: bool) -> Tree {
+        NAMED.with(|named| {
+            *named.borrow_mut() = if extract {
+                tree.take_all_named()
+            } else {
+                HashMap::new()
+            };
+        });
+        tree.diff(&mut new as &mut dyn Widget<(), (), TestRenderer>);
+        let _ = new.layout(
+            &mut tree,
+            &TestRenderer,
+            &layout::Limits::new(Size::ZERO, Size::new(800.0, 600.0)),
+        );
+        NAMED.with(|named| named.borrow_mut().clear());
+        tree
+    }
+
+    fn tree(widget: &Control) -> Tree {
+        Tree::new(widget as &dyn Widget<(), (), TestRenderer>)
+    }
+    fn value(tree: &Tree) -> u32 {
+        *tree.state.downcast_ref::<u32>()
+    }
+
+    #[test]
+    fn named_siblings_move_their_state_to_the_new_position() {
+        for extract in [false, true] {
+            let old = Control::row(vec![
+                Control::leaf(Some("label"), None),
+                Control::leaf(Some("input"), Some(17)),
+            ]);
+            let new = Control::row(vec![
+                Control::leaf(Some("input"), Some(0)),
+                Control::leaf(Some("label"), None),
+            ]);
+            let tree = reconcile(tree(&old), new, extract);
+            assert_eq!(value(&tree.children[0]), 17);
+            assert_eq!(tree.children[1].tag, Tag::stateless());
+        }
+    }
+
+    #[test]
+    fn insertion_before_a_named_child_keeps_both_children() {
+        for extract in [false, true] {
+            let old =
+                Control::row(vec![Control::leaf(Some("input"), Some(17))]);
+            let new = Control::row(vec![
+                Control::leaf(None, None),
+                Control::leaf(Some("input"), Some(0)),
+            ]);
+            let tree = reconcile(tree(&old), new, extract);
+            assert_eq!(tree.children.len(), 2);
+            assert_eq!(value(&tree.children[1]), 17);
+        }
+    }
+
+    #[test]
+    fn removal_before_a_named_child_keeps_its_state() {
+        for extract in [false, true] {
+            let old = Control::row(vec![
+                Control::leaf(None, None),
+                Control::leaf(Some("input"), Some(17)),
+            ]);
+            let new = Control::row(vec![Control::leaf(Some("input"), Some(0))]);
+            let tree = reconcile(tree(&old), new, extract);
+            assert_eq!(value(&tree.children[0]), 17);
+        }
+    }
+
+    #[test]
+    fn unnamed_children_retain_positional_state_when_named_siblings_move() {
+        let old = Control::row(vec![
+            Control::leaf(Some("left"), Some(17)),
+            Control::leaf(None, Some(29)),
+            Control::leaf(Some("right"), Some(41)),
+        ]);
+        let new = Control::row(vec![
+            Control::leaf(Some("right"), Some(0)),
+            Control::leaf(None, Some(0)),
+            Control::leaf(Some("left"), Some(0)),
+        ]);
+        let tree = reconcile(tree(&old), new, true);
+        assert_eq!(
+            tree.children.iter().map(value).collect::<Vec<_>>(),
+            [41, 29, 17]
+        );
+    }
+
+    #[test]
+    fn restored_named_state_is_checked_against_the_new_widget_tag() {
+        // The same name is reused by controls of different kinds. The
+        // retained pool must never hand the input the label's empty state.
+        let old = Control::row(vec![
+            Control::leaf(Some("shared"), None),
+            Control::leaf(Some("shared"), Some(17)),
+        ]);
+        let new = Control::row(vec![
+            Control::leaf(Some("shared"), Some(0)),
+            Control::leaf(Some("shared"), None),
+        ]);
+        let tree = reconcile(tree(&old), new, true);
+        assert_eq!(tree.children[0].tag, Tag::of::<u32>());
+    }
+
+    #[test]
+    fn a_moved_named_parent_keeps_its_unnamed_descendant_state() {
+        let mut parent = Control::row(vec![Control::leaf(None, Some(17))]);
+        parent.name = Some("card");
+        let old = Control::row(vec![parent]);
+        let mut parent = Control::row(vec![Control::leaf(None, Some(0))]);
+        parent.name = Some("card");
+        let new = Control::row(vec![Control::leaf(None, None), parent]);
+        let tree = reconcile(tree(&old), new, true);
+        assert_eq!(value(&tree.children[1].children[0]), 17);
+    }
+
+    #[test]
+    fn duplicate_names_do_not_reuse_an_extracted_empty_placeholder() {
+        let controls = || {
+            Control::row(vec![
+                Control::leaf(Some("shared"), Some(17)),
+                Control::leaf(Some("shared"), Some(29)),
+            ])
+        };
+        let mut state = tree(&controls());
+        for _ in 0..3 {
+            state = reconcile(state, controls(), true);
+            assert_eq!(state.children.len(), 2);
         }
     }
 }
