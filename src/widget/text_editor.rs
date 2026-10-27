@@ -8,7 +8,6 @@ pub use iced_widget::text_editor::{
     Position, Selection, State, Status, Style, StyleFn,
 };
 
-use crate::theme::selection;
 use crate::widget::menu::MenuBarState;
 
 use iced_core::event::Event;
@@ -16,8 +15,7 @@ use iced_core::text::highlighter;
 use iced_core::widget::Widget;
 use iced_core::widget::tree::{self, Tree};
 use iced_core::{
-    Background, Clipboard, Color, Layout, Length, Rectangle, Shell, Size, Vector, mouse, overlay,
-    renderer, window,
+    Clipboard, Layout, Length, Rectangle, Shell, Size, Vector, mouse, overlay, renderer, window,
 };
 
 type InnerEditor<'a, Message> =
@@ -36,52 +34,13 @@ struct EditorWrapperState {
 
 impl<'a, Message: Clone + 'static> TextEditor<'a, Message> {
     /// Creates a new [`TextEditor`] from the given [`Content`].
-    ///
-    /// Selected text is drawn on a solid fill, the style's selection colour
-    /// (the accent), in the household fill rule's colour for the text
-    /// (household-ui RULES.md rule 6: text selected in something short
-    /// being written).
     pub fn new(content: &'a Content<crate::Renderer>) -> Self {
         Self {
             inner: iced_widget::text_editor(content)
-                .selection_fill(|theme: &crate::Theme, style| solid_fill(theme, style))
-                .selected_text_color(|theme: &crate::Theme, style| {
-                    selection::on_solid(style.value, solid_fill(theme, style), theme.cosmic().accent.on.into())
-                }),
+                .selected_text_color(|theme: &crate::Theme, _| theme.cosmic().accent.on.into()),
             has_context_menu: true,
             window_id: crate::widget::text_context_menu::current_window_id(),
         }
-    }
-
-    /// Marks selected text with the selection tint, the accent at a third
-    /// over what is beneath, in place of the solid accent: for text selected
-    /// in content that is read rather than written (household-ui RULES.md
-    /// rule 6).
-    ///
-    /// `beneath` is the colour under the editor's text, by default its
-    /// style's background (laid over the theme's background).
-    ///
-    /// `strongest` is the page's strongest text colour, the colour grey
-    /// text goes to on the tint, by default the theme's text colour on its
-    /// background.
-    pub fn selection_tint(mut self, beneath: Option<Color>, strongest: Option<Color>) -> Self {
-        let tint = move |theme: &crate::Theme, style: &Style| {
-            let beneath = beneath.unwrap_or_else(|| default_beneath(theme, style));
-            let strongest = strongest.unwrap_or_else(|| theme.cosmic().on_bg_color().into());
-            let accent = selection::opaque_over(style.selection, beneath);
-            (accent, beneath, strongest)
-        };
-        self.inner = self
-            .inner
-            .selection_fill(move |theme: &crate::Theme, style| {
-                let (accent, beneath, _) = tint(theme, style);
-                selection::tint(accent, beneath)
-            })
-            .selected_text_color(move |theme: &crate::Theme, style| {
-                let (accent, beneath, strongest) = tint(theme, style);
-                selection::on_tint(style.value, accent, beneath, strongest)
-            });
-        self
     }
 
     /// Controls whether the right-click context menu is shown.
@@ -140,8 +99,7 @@ impl<'a, Message: Clone + 'static> TextEditor<'a, Message> {
         self
     }
 
-    /// Sets the foreground drawn over the text selection's fill, in place of
-    /// the fill rule's colour.
+    /// Sets the foreground drawn over the text selection's fill.
     pub fn selected_text_color(
         mut self,
         color: impl Fn(&crate::Theme, &Style) -> iced_core::Color + 'a,
@@ -193,22 +151,6 @@ impl<'a, Message: Clone + 'static> TextEditor<'a, Message> {
         }
         false
     }
-}
-
-/// The colour under the editor's text: its style's background, laid over
-/// the theme's background
-fn default_beneath(theme: &crate::Theme, style: &Style) -> Color {
-    let base: Color = theme.cosmic().bg_color().into();
-    match style.background {
-        Background::Color(background) => selection::opaque_over(background, base),
-        _ => base,
-    }
-}
-
-/// The solid selection fill: the style's selection colour, made opaque
-/// over what is beneath, as it is drawn over the unselected text
-fn solid_fill(theme: &crate::Theme, style: &Style) -> Color {
-    selection::opaque_over(style.selection, default_beneath(theme, style))
 }
 
 /// Creates a new [`TextEditor`] from the given [`Content`].

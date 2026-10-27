@@ -5,7 +5,6 @@
 
 #[cfg(xdg_portal)]
 pub mod portal;
-pub(crate) mod selection;
 pub mod style;
 
 use ::iced::Alignment;

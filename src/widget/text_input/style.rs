@@ -24,9 +24,7 @@ pub struct Appearance {
     pub label_color: Color,
     /// The placeholder text [`Color`].
     pub placeholder_color: Color,
-    /// The on colour of `selected_fill`: selected text is drawn in the fill
-    /// rule's colour for the text colour on `selected_fill`, and greys go to
-    /// this colour (household-ui RULES.md rule 6).
+    /// The text [`Color`] of the text input.
     pub selected_text_color: Color,
     /// The icon [`Color`] of the text input.
     pub icon_color: Option<Color>,

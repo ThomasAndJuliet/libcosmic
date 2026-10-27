@@ -38,13 +38,6 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # household-tones (household-kit) is a private git dependency, over ssh.
-      # Its read-only deploy key must be a secret of this repository.
-      - name: Let git and cargo fetch the private household crates
-        env:
-          HOUSEHOLD_KIT_DEPLOY_KEY: ${{ secrets.HOUSEHOLD_KIT_DEPLOY_KEY }}
-        run: scripts/ci-private-crates.sh household-kit
-
       - name: libcosmic
         run: cargo test --lib
 
