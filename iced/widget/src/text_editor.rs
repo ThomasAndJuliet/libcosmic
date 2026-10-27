@@ -1158,9 +1158,7 @@ where
                 }
                 Selection::Range(ranges) => {
                     // Only the default text colour is replaced: spans the
-                    // highlighter coloured keep their colours on the fill
-                    // (moving them too is stage 2 of the household
-                    // highlight standard).
+                    // highlighter coloured keep their colours on the fill.
                     let selected_text = self
                         .selected_text_color
                         .as_ref()

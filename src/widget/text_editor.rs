@@ -108,6 +108,17 @@ impl<'a, Message: Clone + 'static> TextEditor<'a, Message> {
         self
     }
 
+    /// Sets the fill drawn behind selected text, in place of the style's
+    /// `selection`. The fill is drawn over the unselected text, so it should
+    /// be opaque.
+    pub fn selection_fill(
+        mut self,
+        color: impl Fn(&crate::Theme, &Style) -> iced_core::Color + 'a,
+    ) -> Self {
+        self.inner = self.inner.selection_fill(color);
+        self
+    }
+
     pub fn line_height(mut self, line_height: impl Into<iced_core::text::LineHeight>) -> Self {
         self.inner = self.inner.line_height(line_height);
         self

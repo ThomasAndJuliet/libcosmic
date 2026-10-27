@@ -2949,12 +2949,19 @@ pub fn draw<'a, Message>(
         };
         renderer.fill_text(text.clone(), bounds.position(), color, text_bounds);
 
-        // Redraw the same text in the selected color, clipped to the selection quads,
-        // so glyph shaping and positioning stay identical to the unselected pass.
+        // Redraw the same text in the selected color, clipped to each
+        // selection quad, so glyph shaping and positioning stay identical to
+        // the unselected pass. A layer draws its quads before its text, so
+        // the fill goes in the quad's own layer: drawn in this one it would
+        // lie under the first pass, whose glyphs would fringe the new ones.
         if is_selecting {
-            fill_cursors(renderer);
-            for (quad, _) in &cursors {
-                renderer.with_layer(quad.bounds + shift, |renderer| {
+            for (quad, fill) in &cursors {
+                let quad = renderer::Quad {
+                    bounds: quad.bounds + shift,
+                    ..*quad
+                };
+                renderer.with_layer(quad.bounds, |renderer| {
+                    renderer.fill_quad(quad, *fill);
                     renderer.fill_text(
                         text.clone(),
                         bounds.position(),

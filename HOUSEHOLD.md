@@ -58,6 +58,16 @@ Each commit says where it came from, using an `Origin:` line or a household-ui p
   redraws selected text over its fill, using the accent's on colour by
   default, with an additive `selected_text_color` callback for an app's
   fill-colour rule (as one-line text inputs already do).
+- **selection (bug fix):** text inputs and text editors draw the selection
+  fill in each selection rectangle's own layer, with the selected text
+  redrawn there, so the fill covers the first text pass and its glyphs no
+  longer fringe the redrawn ones (a layer draws its quads before its text).
+  iced's editor and libcosmic's `TextEditor` have an additive
+  `selection_fill` callback, so an app can supply its own opaque fill.
+  Colours are upstream's: the style's selection fill, and the theme's on
+  colour for the text. The household colour rule for selections lives in
+  the apps, through `household-tones` (Juliet, 25 Oct: "keep libcosmic close
+  to the original").
 - **context_menu:** native popups are anchored at the window cursor in scrolled views;
   menus inherit the window currently building them, as text-field menus do,
   instead of targeting the reserved placeholder window.

@@ -93,6 +93,10 @@ pub mod text_editor;
 #[doc(inline)]
 pub use text_editor::TextEditor;
 
+// The selection fill covers the first text pass (render tests)
+#[cfg(test)]
+mod selection_tests;
+
 #[doc(inline)]
 pub use iced_core::widget::{Id, Operation, Widget};
 
