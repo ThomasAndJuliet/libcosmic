@@ -256,14 +256,14 @@ where
         renderer: &Renderer,
         dnd_rectangles: &mut crate::core::clipboard::DndDestinationRectangles,
     ) {
-        if let Some(l) = layout.children().next() {
-            self.content.as_widget().drag_destinations(
-                state,
-                l.with_virtual_offset(layout.virtual_offset()),
-                renderer,
-                dnd_rectangles,
-            );
-        }
+        // The content's layout is this widget's own (see `layout`): it is
+        // not wrapped in a child node, as a container's is
+        self.content.as_widget().drag_destinations(
+            state,
+            layout,
+            renderer,
+            dnd_rectangles,
+        );
     }
 }
 
@@ -446,4 +446,19 @@ pub struct Style {
     pub shadow: Shadow,
     /// The border radius of the shadow.
     pub shadow_border_radius: border::Radius,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::drop_target::{Target, targets};
+
+    /// A float takes drops where its content is, as the bare content
+    #[test]
+    fn a_float_keeps_its_contents_drop_targets() {
+        let bare = targets::<(), crate::Theme>(Target.into());
+        let float: super::Float<'_, (), crate::Theme, ()> =
+            super::Float::new(Target);
+        let floated = targets::<(), crate::Theme>(float.into());
+        assert_eq!(floated, bare);
+    }
 }

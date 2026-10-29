@@ -289,14 +289,14 @@ where
         renderer: &Renderer,
         dnd_rectangles: &mut crate::core::clipboard::DndDestinationRectangles,
     ) {
-        if let Some(l) = layout.children().next() {
-            self.content.as_widget().drag_destinations(
-                state,
-                l.with_virtual_offset(layout.virtual_offset()),
-                renderer,
-                dnd_rectangles,
-            );
-        }
+        // The content's layout is this widget's own (see `layout`): it is
+        // not wrapped in a child node, as a container's is
+        self.content.as_widget().drag_destinations(
+            state,
+            layout,
+            renderer,
+            dnd_rectangles,
+        );
     }
 }
 
@@ -313,5 +313,21 @@ where
         themer: Themer<'a, Message, Theme, Renderer>,
     ) -> Element<'a, Message, AnyTheme, Renderer> {
         Element::new(themer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::drop_target::{Target, targets};
+
+    /// A themed view takes drops where its widgets are, as unthemed
+    #[test]
+    fn a_themer_keeps_its_contents_drop_targets() {
+        let bare = targets::<(), crate::Theme>(Target.into());
+        assert_eq!(bare, vec![(7.0, 3.0, 40.0, 20.0)]);
+        let themer: super::Themer<'_, (), crate::Theme, ()> =
+            super::Themer::new(Some(crate::Theme::Dark), Target);
+        let themed = targets::<(), crate::Theme>(themer.into());
+        assert_eq!(themed, bare);
     }
 }

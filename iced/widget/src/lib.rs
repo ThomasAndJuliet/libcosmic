@@ -156,3 +156,104 @@ pub mod markdown;
 pub use crate::core::theme::{self, Theme};
 pub use action::Action;
 pub use renderer::Renderer;
+
+#[cfg(test)]
+pub(crate) mod drop_target {
+    //! A widget that takes drops over its own bounds, for the wrappers'
+    //! tests: a wrapper must leave its content's drop targets where the
+    //! content is laid out
+
+    use crate::core::clipboard::DndDestinationRectangles;
+    use crate::core::widget::Tree;
+    use crate::core::{Element, Layout, Length, Rectangle, Size, Widget};
+    use crate::core::{layout, mouse, renderer};
+
+    pub struct Target;
+
+    impl<Message, Theme> Widget<Message, Theme, ()> for Target {
+        fn size(&self) -> Size<Length> {
+            Size::new(Length::Fixed(40.0), Length::Fixed(20.0))
+        }
+
+        fn layout(
+            &mut self,
+            _tree: &mut Tree,
+            _renderer: &(),
+            _limits: &layout::Limits,
+        ) -> layout::Node {
+            layout::Node::new(Size::new(40.0, 20.0))
+                .move_to(crate::core::Point::new(7.0, 3.0))
+        }
+
+        fn draw(
+            &self,
+            _tree: &Tree,
+            _renderer: &mut (),
+            _theme: &Theme,
+            _style: &renderer::Style,
+            _layout: Layout<'_>,
+            _cursor: mouse::Cursor,
+            _viewport: &Rectangle,
+        ) {
+        }
+
+        fn drag_destinations(
+            &self,
+            _state: &Tree,
+            layout: Layout<'_>,
+            _renderer: &(),
+            dnd_rectangles: &mut DndDestinationRectangles,
+        ) {
+            let bounds = layout.bounds();
+            dnd_rectangles.push(dnd::DndDestinationRectangle {
+                id: 1,
+                rectangle: dnd::Rectangle {
+                    x: f64::from(bounds.x),
+                    y: f64::from(bounds.y),
+                    width: f64::from(bounds.width),
+                    height: f64::from(bounds.height),
+                },
+                mime_types: vec!["x-test/target".into()],
+                actions: dnd::DndAction::Move,
+                preferred: dnd::DndAction::Move,
+            });
+        }
+    }
+
+    impl<Message, Theme> From<Target> for Element<'_, Message, Theme, ()> {
+        fn from(target: Target) -> Self {
+            Element::new(target)
+        }
+    }
+
+    /// The drop targets `element` registers, laid out at the origin
+    pub fn targets<Message, Theme>(
+        mut element: Element<'_, Message, Theme, ()>,
+    ) -> Vec<(f64, f64, f64, f64)> {
+        let mut tree = Tree::new(&element);
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &(),
+            &layout::Limits::new(Size::ZERO, Size::new(200.0, 100.0)),
+        );
+        let mut rectangles = DndDestinationRectangles::new();
+        element.as_widget().drag_destinations(
+            &tree,
+            Layout::new(&node),
+            &(),
+            &mut rectangles,
+        );
+        rectangles
+            .into_rectangles()
+            .into_iter()
+            .map(|r| {
+                (
+                    r.rectangle.x,
+                    r.rectangle.y,
+                    r.rectangle.width,
+                    r.rectangle.height,
+                )
+            })
+            .collect()
+    }
+}
