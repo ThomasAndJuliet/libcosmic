@@ -168,6 +168,12 @@ Run the focused regressions from `iced/` with
 
 Juliet, 25 Oct: "the fork carries small bug fixes". Each commit has an `Origin:` line.
 
+- **iced list:** a rebuilt `List` builds its visible rows in `update` and
+  `operate` when it has none yet, as its redraw does, so a press or a Tab
+  focus step between a rebuild and the next frame reaches the rows instead of
+  falling through (Specula; its `list_rows::catch_presses` works around it
+  until its pin has this). Run from `iced/` with
+  `cargo test --locked -p iced_widget --lib list::tests`.
 - **segmented_button:** the focus ring is drawn in the theme's accent text
   colour, not in the style's `active.text_color`, which a style may mean only
   for its chosen part's own fill (a light title on a filled part left the ring
@@ -191,7 +197,7 @@ Juliet, 25 Oct: "the fork carries small bug fixes". Each commit has an `Origin:`
 - the popup lifecycle and menu-model tests that used to run in cosmic-term's CI;
 - `tests/exit_teardown.rs`: a minimal app quits under a headless weston, with and without a popup, and must exit 0 with no SCTK thread left; when its compositor is killed under it, it must end within 10 s, with the SCTK thread joined after reporting the dead connection in at most 2 lines (needs `weston`; fails without it);
 - cosmic-theme's tests;
-- iced's widget state reconciliation, renderer failure tests and SVG tests;
+- iced's widget state reconciliation, widget tests (the list's rows after a rebuild), renderer failure tests and SVG tests;
 - a check of winit's Wayland backend.
 
 Push a `fork/<topic>` branch to get a run before merging it into `household`.

@@ -66,6 +66,10 @@ jobs:
         working-directory: iced
         run: cargo test --locked -p iced_core --lib
 
+      - name: iced widgets
+        working-directory: iced
+        run: cargo test --locked -p iced_widget --lib
+
       - name: iced renderers
         working-directory: iced
         run: |
