@@ -2310,23 +2310,30 @@ where
             let key_is_active = self.model.is_active(key);
             let key_is_focused = state.focused_visible && self.button_is_focused(state, key);
             let key_is_hovered = self.button_is_hovered(state, key);
-            let status_appearance = if self.button_is_pressed(state, key) {
-                appearance.pressed
-            } else if key_is_hovered || menu_open() {
-                appearance.hover
-            } else if key_is_active {
+            let key_is_pressed = self.button_is_pressed(state, key);
+            let own_appearance = if key_is_active {
                 appearance.active
             } else {
                 appearance.inactive
             };
-
-            let button_appearance = if nth == 0 {
-                status_appearance.first
-            } else if nth + 1 == button_amount {
-                status_appearance.last
+            let status_appearance = if key_is_pressed {
+                appearance.pressed
+            } else if key_is_hovered || menu_open() {
+                appearance.hover
             } else {
-                status_appearance.middle
+                own_appearance
             };
+
+            let item_appearance = |status: super::ItemStatusAppearance| {
+                if nth == 0 {
+                    status.first
+                } else if nth + 1 == button_amount {
+                    status.last
+                } else {
+                    status.middle
+                }
+            };
+            let button_appearance = item_appearance(status_appearance);
 
             // Draw the active hint on tabs
             if appearance.active_width > 0.0 {
@@ -2405,17 +2412,38 @@ where
                 }
             }
 
+            let background_bounds = Rectangle {
+                x: bounds.x - f32::from(self.button_padding[0]) + indent_padding,
+                width: bounds.width + f32::from(self.button_padding[0])
+                    - f32::from(self.button_padding[2])
+                    - indent_padding,
+                ..bounds
+            };
+
+            // A hover or press lays its wash over the part's own background,
+            // as a button's overlay does, instead of replacing it.
+            if (key_is_pressed || key_is_hovered || menu_open())
+                && let Some(background) = own_appearance.background
+            {
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: background_bounds,
+                        border: Border {
+                            radius: item_appearance(own_appearance).border.radius,
+                            ..Default::default()
+                        },
+                        shadow: Shadow::default(),
+                        snap: true,
+                    },
+                    background,
+                );
+            }
+
             // Render the background of the button.
             if key_is_focused || status_appearance.background.is_some() {
                 renderer.fill_quad(
                     renderer::Quad {
-                        bounds: Rectangle {
-                            x: bounds.x - f32::from(self.button_padding[0]) + indent_padding,
-                            width: bounds.width + f32::from(self.button_padding[0])
-                                - f32::from(self.button_padding[2])
-                                - indent_padding,
-                            ..bounds
-                        },
+                        bounds: background_bounds,
                         border: if key_is_focused {
                             // The theme's colour, as the default styles draw
                             // it: a style's text colour may be meant only for

@@ -173,6 +173,14 @@ Juliet, 25 Oct: "the fork carries small bug fixes". Each commit has an `Origin:`
   for its chosen part's own fill (a light title on a filled part left the ring
   near-invisible on the unchosen parts; Marginalium). The built-in styles give
   `active.text_color` that same colour, so they look as before.
+- **segmented_button:** a hovered or pressed part lays the style's wash over
+  its own background, as a button lays its overlay, instead of replacing it,
+  so a chosen part with a fill of its own keeps it under the hover (found in
+  Marginalium). Parts with no background of their own (every unchosen part in
+  the built-in styles) look as before; in the built-in styles the chosen
+  part, whose own fill is the same grey as the wash, is a little darker when
+  hovered or pressed (Control: 28 % / 24 % grey instead of 20 % / 15 %; tabs:
+  44 % / 40 % instead of 30 % / 25 %).
 
 ## CI
 

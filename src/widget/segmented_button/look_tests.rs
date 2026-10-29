@@ -176,3 +176,84 @@ fn the_focus_ring_is_the_themes_colour_not_the_chosen_parts_text() {
         );
     }
 }
+
+/// `top`, of opacity `alpha`, laid over the opaque `under`
+fn over(top: Color, under: Color) -> [u8; 3] {
+    let mix = |t: f32, u: f32| t * top.a + u * (1.0 - top.a);
+    rgb8(Color::from_rgb(
+        mix(top.r, under.r),
+        mix(top.g, under.g),
+        mix(top.b, under.b),
+    ))
+}
+
+/// A hovered or pressed part lays the style's wash over its own fill: the
+/// chosen part's, and an unchosen part's when the style gives it one
+#[test]
+fn hover_and_press_lay_the_wash_over_the_parts_own_fill() {
+    let chosen = Color::from_rgb8(0xc0, 0x10, 0x10);
+    let unchosen = Color::from_rgb8(0x10, 0x30, 0xc0);
+    let style = || {
+        control_with(move |_, appearance| {
+            appearance.active.background = Some(Background::Color(chosen));
+            appearance.inactive.background = Some(Background::Color(unchosen));
+        })
+    };
+    for theme in [crate::Theme::light(), crate::Theme::dark()] {
+        let defaults = theme.horizontal(&Style::Control);
+        let wash = |status: super::ItemStatusAppearance| match status.background {
+            Some(Background::Color(colour)) => colour,
+            _ => panic!("the Control style has a plain wash"),
+        };
+        let (hover, press) = (wash(defaults.hover), wash(defaults.pressed));
+
+        // The first part is chosen
+        let model = model(0);
+        let at_rest = render(control(&model, style()), &theme, Then::Rest);
+        assert_eq!(pixel(&at_rest, IN_FIRST), rgb8(chosen), "the chosen fill");
+        assert_eq!(
+            pixel(&at_rest, IN_SECOND),
+            rgb8(unchosen),
+            "the unchosen fill"
+        );
+
+        for (then, at, wash, own, part) in [
+            (
+                Then::Hover(IN_FIRST),
+                IN_FIRST,
+                hover,
+                chosen,
+                "hovered chosen",
+            ),
+            (
+                Then::Hover(IN_SECOND),
+                IN_SECOND,
+                hover,
+                unchosen,
+                "hovered unchosen",
+            ),
+            (
+                Then::Press(IN_FIRST),
+                IN_FIRST,
+                press,
+                chosen,
+                "pressed chosen",
+            ),
+            (
+                Then::Press(IN_SECOND),
+                IN_SECOND,
+                press,
+                unchosen,
+                "pressed unchosen",
+            ),
+        ] {
+            let pixels = render(control(&model, style()), &theme, then);
+            let expected = over(wash, own);
+            assert!(
+                near(pixel(&pixels, at), expected, 2),
+                "the {part} part is {:?}, not the wash over its fill, {expected:?}",
+                pixel(&pixels, at)
+            );
+        }
+    }
+}
