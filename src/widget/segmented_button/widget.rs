@@ -2417,9 +2417,12 @@ where
                             ..bounds
                         },
                         border: if key_is_focused {
+                            // The theme's colour, as the default styles draw
+                            // it: a style's text colour may be meant only for
+                            // its own fill, and not show on every part
                             Border {
                                 width: 1.0,
-                                color: appearance.active.text_color,
+                                color: theme.cosmic().accent_text_color().into(),
                                 radius: button_appearance.border.radius,
                             }
                         } else {

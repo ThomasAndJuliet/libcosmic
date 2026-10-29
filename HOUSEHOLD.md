@@ -164,6 +164,16 @@ remain intact.
 Run the focused regressions from `iced/` with
 `cargo test --locked -p iced_core --lib widget::tree -- --test-threads=1`.
 
+### Small bug fixes, 29 October
+
+Juliet, 25 Oct: "the fork carries small bug fixes". Each commit has an `Origin:` line.
+
+- **segmented_button:** the focus ring is drawn in the theme's accent text
+  colour, not in the style's `active.text_color`, which a style may mean only
+  for its chosen part's own fill (a light title on a filled part left the ring
+  near-invisible on the unchosen parts; Marginalium). The built-in styles give
+  `active.text_color` that same colour, so they look as before.
+
 ## CI
 
 `.github/workflows/household.yml` runs on neo's `neo-ubuntu` runner for pushes to `household` and `fork/**` by Tom or Juliet; nothing runs on GitHub-hosted runners. Upstream's workflows are removed. It runs:

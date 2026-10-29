@@ -74,6 +74,8 @@
 //! ```
 
 mod horizontal;
+#[cfg(test)]
+mod look_tests;
 mod model;
 mod style;
 mod vertical;
