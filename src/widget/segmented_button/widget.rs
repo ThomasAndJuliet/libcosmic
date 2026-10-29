@@ -2335,6 +2335,14 @@ where
             };
             let button_appearance = item_appearance(status_appearance);
 
+            // The chosen part keeps its own text and icon colour when hovered
+            // or pressed: they are meant for its own fill, under the wash.
+            let content_color = if key_is_active {
+                appearance.active.text_color
+            } else {
+                status_appearance.text_color
+            };
+
             // Draw the active hint on tabs
             if appearance.active_width > 0.0 {
                 let active_width = if key_is_active {
@@ -2496,7 +2504,7 @@ where
                     style,
                     cursor,
                     viewport,
-                    status_appearance.text_color,
+                    content_color,
                     Rectangle {
                         width,
                         height: width,
@@ -2518,7 +2526,7 @@ where
                         style,
                         cursor,
                         viewport,
-                        status_appearance.text_color,
+                        content_color,
                         Rectangle {
                             width: 16.0,
                             height: 16.0,
@@ -2571,7 +2579,7 @@ where
                     bounds.position(),
                     self.model
                         .text_color(key)
-                        .unwrap_or(status_appearance.text_color),
+                        .unwrap_or(content_color),
                     Rectangle {
                         x: bounds.x,
                         width: bounds.width,
@@ -2592,7 +2600,7 @@ where
                     style,
                     cursor,
                     viewport,
-                    status_appearance.text_color,
+                    content_color,
                     close_button_bounds,
                     self.close_icon.clone(),
                 );

@@ -187,6 +187,12 @@ Juliet, 25 Oct: "the fork carries small bug fixes". Each commit has an `Origin:`
   part, whose own fill is the same grey as the wash, is a little darker when
   hovered or pressed (Control: 28 % / 24 % grey instead of 20 % / 15 %; tabs:
   44 % / 40 % instead of 30 % / 25 %).
+- **segmented_button:** a hovered or pressed chosen part keeps the active
+  state's text and icon colour, meant for its own fill, instead of taking the
+  hover's (accent text on a muted chosen fill under the wash was low contrast;
+  Deductum, Marginalium). An unchosen part still takes the hover's colour. The
+  built-in styles' hover text colour is their active one, so they look as
+  before.
 
 ## CI
 
