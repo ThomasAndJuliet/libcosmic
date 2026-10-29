@@ -48,6 +48,18 @@ impl<'a, T, Message, Theme, Renderer> List<'a, T, Message, Theme, Renderer> {
         self.spacing = amount.into().0;
         self
     }
+
+    /// Builds the visible elements out of the internal visible layouts when
+    /// the view was recreated and has none yet.
+    fn rebuild_visible_elements(&mut self, state: &State) {
+        if self.visible_elements.is_empty() {
+            self.visible_elements = state
+                .visible_layouts
+                .iter()
+                .map(|(i, _, _)| (self.view_item)(*i, &self.content.items[*i]))
+                .collect();
+        }
+    }
 }
 
 struct State {
@@ -363,6 +375,12 @@ where
         let state = tree.state.downcast_mut::<State>();
         let offset = layout.position() - Point::ORIGIN;
 
+        // A rebuilt list has no elements until its next redraw; without them
+        // an event between a rebuild and that redraw would miss the rows
+        if !matches!(event, Event::Window(window::Event::RedrawRequested(_))) {
+            self.rebuild_visible_elements(state);
+        }
+
         for (element, (index, layout, tree)) in self
             .visible_elements
             .iter_mut()
@@ -424,15 +442,7 @@ where
 
             // If view was recreated, we repopulate the visible elements
             // out of the internal visible layouts
-            if self.visible_elements.is_empty() {
-                self.visible_elements = state
-                    .visible_layouts
-                    .iter()
-                    .map(|(i, _, _)| {
-                        (self.view_item)(*i, &self.content.items[*i])
-                    })
-                    .collect();
-            }
+            self.rebuild_visible_elements(state);
 
             // Clear no longer visible elements
             let top = state
@@ -585,6 +595,9 @@ where
     ) {
         let state = tree.state.downcast_mut::<State>();
         let offset = layout.position() - Point::ORIGIN;
+
+        // As in `update`: a rebuilt list has no elements until its next redraw
+        self.rebuild_visible_elements(state);
 
         for (element, (_item, layout, tree)) in self
             .visible_elements
@@ -790,4 +803,222 @@ where
     }
 
     Err(left)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::clipboard;
+    use crate::core::time::Instant;
+    use crate::core::widget::operation::{self, Focusable, Operation, Outcome};
+
+    const ROW: f32 = 20.0;
+    const VIEWPORT: Rectangle = Rectangle {
+        x: 0.0,
+        y: 0.0,
+        width: 100.0,
+        height: 100.0,
+    };
+
+    /// A row that publishes its index when pressed and can be focused
+    struct Row(usize);
+
+    #[derive(Default)]
+    struct RowState {
+        focused: bool,
+    }
+
+    impl Focusable for RowState {
+        fn is_focused(&self) -> bool {
+            self.focused
+        }
+
+        fn focus(&mut self) {
+            self.focused = true;
+        }
+
+        fn unfocus(&mut self) {
+            self.focused = false;
+        }
+    }
+
+    impl Widget<usize, (), ()> for Row {
+        fn size(&self) -> Size<Length> {
+            Size::new(Length::Fixed(VIEWPORT.width), Length::Fixed(ROW))
+        }
+
+        fn layout(
+            &mut self,
+            _tree: &mut Tree,
+            _renderer: &(),
+            _limits: &layout::Limits,
+        ) -> layout::Node {
+            layout::Node::new(Size::new(VIEWPORT.width, ROW))
+        }
+
+        fn draw(
+            &self,
+            _tree: &Tree,
+            _renderer: &mut (),
+            _theme: &(),
+            _style: &renderer::Style,
+            _layout: Layout<'_>,
+            _cursor: mouse::Cursor,
+            _viewport: &Rectangle,
+        ) {
+        }
+
+        fn tag(&self) -> tree::Tag {
+            tree::Tag::of::<RowState>()
+        }
+
+        fn state(&self) -> tree::State {
+            tree::State::new(RowState::default())
+        }
+
+        fn update(
+            &mut self,
+            _tree: &mut Tree,
+            event: &Event,
+            layout: Layout<'_>,
+            cursor: mouse::Cursor,
+            _renderer: &(),
+            _clipboard: &mut dyn Clipboard,
+            shell: &mut Shell<'_, usize>,
+            _viewport: &Rectangle,
+        ) {
+            if let Event::Mouse(mouse::Event::ButtonPressed(
+                mouse::Button::Left,
+            )) = event
+            {
+                if cursor.is_over(layout.bounds()) {
+                    shell.publish(self.0);
+                    shell.capture_event();
+                }
+            }
+        }
+
+        fn operate(
+            &mut self,
+            tree: &mut Tree,
+            layout: Layout<'_>,
+            _renderer: &(),
+            operation: &mut dyn Operation,
+        ) {
+            let state = tree.state.downcast_mut::<RowState>();
+            operation.focusable(None, layout.bounds(), state);
+        }
+    }
+
+    fn list(content: &Content<usize>) -> List<'_, usize, usize, (), ()> {
+        List::new(content, |i, _| Element::new(Row(i)))
+    }
+
+    fn layout(
+        list: &mut List<'_, usize, usize, (), ()>,
+        tree: &mut Tree,
+    ) -> layout::Node {
+        list.layout(
+            tree,
+            &(),
+            &layout::Limits::new(Size::ZERO, VIEWPORT.size()),
+        )
+    }
+
+    /// Sends `event` to `list` and returns the messages it published
+    fn send(
+        list: &mut List<'_, usize, usize, (), ()>,
+        tree: &mut Tree,
+        node: &layout::Node,
+        event: Event,
+        cursor: mouse::Cursor,
+    ) -> Vec<usize> {
+        let mut messages = Vec::new();
+        let mut shell = Shell::new(&mut messages);
+        list.update(
+            tree,
+            &event,
+            Layout::new(node),
+            cursor,
+            &(),
+            &mut clipboard::Null,
+            &mut shell,
+            &VIEWPORT,
+        );
+        messages
+    }
+
+    /// Lays out and draws a first list over ten rows, then rebuilds it, as
+    /// every message rebuilds the view, and lays the new one out: the
+    /// returned list has had no redraw yet
+    fn rebuilt<'a>(
+        content: &'a Content<usize>,
+        tree: &mut Tree,
+    ) -> (List<'a, usize, usize, (), ()>, layout::Node) {
+        let mut first = list(content);
+        *tree = Tree::new(&first as &dyn Widget<usize, (), ()>);
+        let node = layout(&mut first, tree);
+        let redraw =
+            Event::Window(window::Event::RedrawRequested(Instant::now()));
+        let _ =
+            send(&mut first, tree, &node, redraw, mouse::Cursor::Unavailable);
+        assert_eq!(
+            tree.state.downcast_ref::<State>().visible_layouts.len(),
+            5,
+            "the first frame shows five rows"
+        );
+
+        let mut rebuilt = list(content);
+        let node = layout(&mut rebuilt, tree);
+        (rebuilt, node)
+    }
+
+    /// A press between a rebuild and the next frame reaches the row under
+    /// the pointer instead of falling through the list
+    #[test]
+    fn a_press_right_after_a_rebuild_reaches_the_row() {
+        let content = Content::with_items((0..10).collect());
+        let mut tree = Tree::empty();
+        let (mut list, node) = rebuilt(&content, &mut tree);
+
+        let press =
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        let cursor = mouse::Cursor::Available(Point::new(50.0, 2.5 * ROW));
+
+        assert_eq!(send(&mut list, &mut tree, &node, press, cursor), [2]);
+    }
+
+    /// A focus step between a rebuild and the next frame reaches the rows:
+    /// with nothing focused, it focuses the first row
+    #[test]
+    fn focus_next_right_after_a_rebuild_reaches_the_first_row() {
+        let content = Content::with_items((0..10).collect());
+        let mut tree = Tree::empty();
+        let (mut list, node) = rebuilt(&content, &mut tree);
+
+        let mut operation: Box<dyn Operation> =
+            Box::new(operation::focusable::focus_next());
+        loop {
+            list.operate(
+                &mut tree,
+                Layout::new(&node),
+                &(),
+                operation.as_mut(),
+            );
+            match operation.finish() {
+                Outcome::Chain(next) => operation = next,
+                _ => break,
+            }
+        }
+
+        let focused: Vec<usize> = tree
+            .state
+            .downcast_ref::<State>()
+            .visible_layouts
+            .iter()
+            .filter(|(_, _, row)| row.state.downcast_ref::<RowState>().focused)
+            .map(|(i, _, _)| *i)
+            .collect();
+        assert_eq!(focused, [0]);
+    }
 }
