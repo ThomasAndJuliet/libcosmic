@@ -257,3 +257,39 @@ fn hover_and_press_lay_the_wash_over_the_parts_own_fill() {
         }
     }
 }
+
+/// A hovered or pressed chosen part keeps the chosen text colour, meant for
+/// its own fill, instead of taking the hover's text colour
+#[test]
+fn the_chosen_part_keeps_its_text_colour_when_hovered_or_pressed() {
+    let label = Color::from_rgb8(0xff, 0xe0, 0x00);
+    let style = || {
+        control_with(move |_, appearance| {
+            appearance.active.background =
+                Some(Background::Color(Color::from_rgb8(0x20, 0x20, 0x60)));
+            appearance.active.text_color = label;
+        })
+    };
+    for theme in [crate::Theme::light(), crate::Theme::dark()] {
+        let hover_text = rgb8(theme.horizontal(&Style::Control).hover.text_color);
+        // The first part is chosen
+        let model = model(0);
+        for (then, state) in [
+            (Then::Rest, "at rest"),
+            (Then::Hover(IN_FIRST), "hovered"),
+            (Then::Press(IN_FIRST), "pressed"),
+        ] {
+            let pixels = render(control(&model, style()), &theme, then);
+            let half = WIDTH / 2 - 4;
+            assert!(
+                count(&pixels, 0, half, rgb8(label)) > 20,
+                "the chosen label {state} is in the chosen text colour"
+            );
+            assert_eq!(
+                count(&pixels, 0, half, hover_text),
+                0,
+                "the chosen part {state} has nothing in the hover's text colour"
+            );
+        }
+    }
+}
