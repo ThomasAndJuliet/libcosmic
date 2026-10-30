@@ -91,6 +91,9 @@ Each commit says where it came from, using an `Origin:` line or a household-ui p
   the tick, in the row's icon colour (the accent text colour on a selected
   row): a radio mark for one choice of several (Juliet, 19 Oct: "we also
   need a radio box like icon").
+  A click on an entry with a submenu leaves the menu open, in a menu bar or
+  a context menu, in the window or as native popups: `click_inside` closes
+  on every other entry.
 - **theme:** hidden `set_active`, for headless rendering in tests.
 - **cosmic-theme:** the background layer's hover and selected take its own
   overlay again, not the one the primary block leaves behind (white in light
