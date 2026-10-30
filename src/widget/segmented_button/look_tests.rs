@@ -293,3 +293,52 @@ fn the_chosen_part_keeps_its_text_colour_when_hovered_or_pressed() {
         }
     }
 }
+
+/// Three parts, "One", "Two" and "Three", with the first chosen
+fn three_parts() -> SingleSelectModel {
+    let mut ids = Vec::new();
+    let mut model = SingleSelectModel::builder()
+        .insert(|b| b.text("One").with_id(|id| ids.push(id)))
+        .insert(|b| b.text("Two").with_id(|id| ids.push(id)))
+        .insert(|b| b.text("Three").with_id(|id| ids.push(id)))
+        .build();
+    model.activate(ids[0]);
+    model
+}
+
+/// The row above the titles, clear of the rounded ends: where the bar, the
+/// chosen part's fill and the 1 px dividers are, with nothing else drawn
+fn top_row(pixels: &[u8]) -> Vec<[u8; 3]> {
+    (20..WIDTH - 20)
+        .map(|x| pixel(pixels, Point::new(x as f32, 4.0)))
+        .collect()
+}
+
+/// A custom style that starts from `Control`'s appearance keeps the
+/// dividers `Control` draws between the parts, where they are and in its
+/// colour (the chosen part's tick stays `Control`'s, below this row)
+#[test]
+fn a_custom_style_keeps_the_controls_dividers() {
+    for theme in [crate::Theme::light(), crate::Theme::dark()] {
+        let model = three_parts();
+        let builtin = render(control(&model, Style::Control), &theme, Then::Rest);
+        let custom = render(control(&model, control_with(|_, _| {})), &theme, Then::Rest);
+        // The row shows the dividers: without them it is not the same
+        let undivided: crate::Element<'_, ()> = segmented_control::horizontal(&model)
+            .width(Length::Fixed(WIDTH as f32))
+            .dividers(false)
+            .on_activate(|_| ())
+            .into();
+        let undivided = render(undivided, &theme, Then::Rest);
+        assert_ne!(
+            top_row(&undivided),
+            top_row(&builtin),
+            "Control's dividers show in the row"
+        );
+        assert_eq!(
+            top_row(&custom),
+            top_row(&builtin),
+            "the custom style's row, dividers included, is Control's"
+        );
+    }
+}
