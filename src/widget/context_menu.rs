@@ -1043,6 +1043,59 @@ mod tests {
         messages.iter().any(f)
     }
 
+    /// Whether a press of Esc with the pointer at `at` was captured, and what it published.
+    fn press_escape(
+        ui: &mut UserInterface<'_, Message, crate::Theme, crate::Renderer>,
+        renderer: &mut crate::Renderer,
+        at: Point,
+    ) -> (Vec<Message>, bool) {
+        let escape = keyboard::Key::Named(keyboard::key::Named::Escape);
+        let mut messages = Vec::new();
+        let (_, statuses) = ui.update(
+            &[Event::Keyboard(keyboard::Event::KeyPressed {
+                key: escape.clone(),
+                modified_key: escape,
+                physical_key: keyboard::key::Physical::Unidentified(
+                    keyboard::key::NativeCode::Unidentified,
+                ),
+                location: keyboard::Location::Standard,
+                modifiers: keyboard::Modifiers::default(),
+                text: None,
+                repeat: false,
+            })],
+            mouse::Cursor::Available(at),
+            renderer,
+            &mut iced_core::clipboard::Null,
+            &mut messages,
+        );
+        (messages, statuses[0] == iced::event::Status::Captured)
+    }
+
+    /// Esc that closes a menu is the menu's: the app's Esc shortcut must not run as
+    /// well. With no menu open, Esc stays the app's. Both as an overlay in the window
+    /// and as a native popup.
+    #[test]
+    fn esc_that_closes_a_context_menu_is_captured() {
+        _ = WINDOWING_SYSTEM.set(WindowingSystem::Wayland);
+        for window in [None, Some(window::Id::unique())] {
+            let mut renderer = renderer();
+            let mut ui = UserInterface::build(
+                button_then_rows(window),
+                Size::new(300.0, 200.0),
+                Cache::default(),
+                &mut renderer,
+            );
+            let (_, captured) = press_escape(&mut ui, &mut renderer, ROW_A);
+            assert!(!captured, "no menu open, window {window:?}: Esc is the app's");
+            let _ = click(&mut ui, &mut renderer, ROW_A, mouse::Button::Right);
+            let (messages, captured) = press_escape(&mut ui, &mut renderer, ROW_A);
+            assert!(has(&messages, |m| matches!(m, Message::Closed)));
+            assert!(captured, "window {window:?}: the Esc that closed the menu leaked");
+            let (_, captured) = press_escape(&mut ui, &mut renderer, ROW_A);
+            assert!(!captured, "menu closed, window {window:?}: Esc is the app's again");
+        }
+    }
+
     #[test]
     fn a_click_outside_a_native_context_menu_only_closes_it() {
         _ = WINDOWING_SYSTEM.set(WindowingSystem::Wayland);
