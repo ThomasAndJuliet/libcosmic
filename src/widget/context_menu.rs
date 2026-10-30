@@ -856,6 +856,7 @@ mod tests {
     enum Message {
         Click,
         Closed,
+        Item(&'static str),
         Surface(crate::surface::Action<Self>),
     }
 
@@ -1006,12 +1007,12 @@ mod tests {
     /// Moves to `at`, then presses and releases `button` there, one frame each, then
     /// moves again as a pointer does. Returns every message, and whether the press
     /// was captured.
-    fn click(
-        ui: &mut UserInterface<'_, Message, crate::Theme, crate::Renderer>,
+    fn click<M>(
+        ui: &mut UserInterface<'_, M, crate::Theme, crate::Renderer>,
         renderer: &mut crate::Renderer,
         at: Point,
         button: mouse::Button,
-    ) -> (Vec<Message>, bool) {
+    ) -> (Vec<M>, bool) {
         let mut messages = Vec::new();
         let mut captured = false;
         for event in [
@@ -1145,6 +1146,186 @@ mod tests {
         assert!(has(&messages, |m| matches!(m, Message::Closed)));
         let (messages, _) = click(&mut ui, &mut renderer, UNDER, mouse::Button::Left);
         assert!(has(&messages, |m| matches!(m, Message::Click)));
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum Pick {
+        Open,
+        First,
+    }
+
+    impl menu::Action for Pick {
+        type Message = Message;
+
+        fn message(&self) -> Message {
+            Message::Item(match self {
+                Self::Open => "Open",
+                Self::First => "First",
+            })
+        }
+    }
+
+    /// A page with a context menu of real entries, 36 px high and 240 wide:
+    /// Recent >, with First in it, then Open. Below a button, as `button_then_rows`.
+    fn page_with_folder(window: Option<window::Id>) -> crate::Element<'static, Message> {
+        let items = menu::items(
+            &std::collections::HashMap::new(),
+            vec![
+                menu::Item::Folder("Recent", vec![menu::Item::Button("First", None, Pick::First)]),
+                menu::Item::Button("Open", None, Pick::Open),
+            ],
+        );
+        let page = crate::widget::container(crate::widget::text("Page"))
+            .width(Length::Fill)
+            .height(Length::Fill);
+        let mut page = context_menu(page, Some(items)).on_close(Message::Closed);
+        if let Some(window) = window {
+            page = page.window_id(window).on_surface_action(Message::Surface);
+        }
+        crate::widget::column::with_children(vec![
+            crate::widget::button::text("Under")
+                .on_press(Message::Click)
+                .width(300)
+                .height(40)
+                .into(),
+            page.into(),
+        ])
+        .into()
+    }
+
+    const FOLDER_WINDOW: Size = Size::new(800.0, 400.0);
+    const ON_PAGE: Point = Point::new(100.0, 60.0);
+
+    fn hover<M>(
+        ui: &mut UserInterface<'_, M, crate::Theme, crate::Renderer>,
+        renderer: &mut crate::Renderer,
+        at: Point,
+    ) -> Vec<M> {
+        let mut messages = Vec::new();
+        _ = ui.update(
+            &[Event::Mouse(mouse::Event::CursorMoved { position: at })],
+            mouse::Cursor::Available(at),
+            renderer,
+            &mut iced_core::clipboard::Null,
+            &mut messages,
+        );
+        messages
+    }
+
+    #[test]
+    fn a_click_on_a_submenu_entry_keeps_an_in_window_context_menu_open() {
+        const RECENT: Point = Point::new(220.0, 78.0);
+        const OPEN: Point = Point::new(220.0, 114.0);
+        const FIRST: Point = Point::new(460.0, 78.0);
+        let left = mouse::Button::Left;
+
+        let mut renderer = renderer();
+        let mut ui = UserInterface::build(
+            page_with_folder(None),
+            FOLDER_WINDOW,
+            Cache::default(),
+            &mut renderer,
+        );
+
+        // The click leaves the submenu usable, and its entry acts and closes the menu
+        _ = click(&mut ui, &mut renderer, ON_PAGE, mouse::Button::Right);
+        _ = hover(&mut ui, &mut renderer, RECENT);
+        let (messages, captured) = click(&mut ui, &mut renderer, RECENT, left);
+        assert!(!has(&messages, |m| matches!(m, Message::Closed)), "the click closed the menu");
+        assert!(captured, "the press is the menu's");
+        _ = hover(&mut ui, &mut renderer, FIRST);
+        let (messages, _) = click(&mut ui, &mut renderer, FIRST, left);
+        assert!(has(&messages, |m| matches!(m, Message::Item("First"))));
+        assert!(has(&messages, |m| matches!(m, Message::Closed)));
+
+        // With a submenu open and clicked, a click elsewhere only closes the menu
+        _ = click(&mut ui, &mut renderer, ON_PAGE, mouse::Button::Right);
+        _ = hover(&mut ui, &mut renderer, RECENT);
+        _ = click(&mut ui, &mut renderer, RECENT, left);
+        let (messages, captured) = click(&mut ui, &mut renderer, UNDER, left);
+        assert!(captured && !has(&messages, |m| matches!(m, Message::Click)));
+        assert!(has(&messages, |m| matches!(m, Message::Closed)));
+
+        // An entry beside a submenu entry acts and closes the menu, as before
+        _ = click(&mut ui, &mut renderer, ON_PAGE, mouse::Button::Right);
+        _ = hover(&mut ui, &mut renderer, RECENT);
+        _ = hover(&mut ui, &mut renderer, OPEN);
+        let (messages, _) = click(&mut ui, &mut renderer, OPEN, left);
+        assert!(has(&messages, |m| matches!(m, Message::Item("Open"))));
+        assert!(has(&messages, |m| matches!(m, Message::Closed)));
+    }
+
+    #[test]
+    fn a_click_on_a_submenu_entry_keeps_a_native_context_menu_open() {
+        _ = WINDOWING_SYSTEM.set(WindowingSystem::Wayland);
+        // In each popup's own coordinates
+        const RECENT: Point = Point::new(120.0, 18.0);
+        const OPEN: Point = Point::new(120.0, 54.0);
+        const FIRST: Point = Point::new(120.0, 18.0);
+        const TOP: Size = Size::new(242.0, 74.0);
+        const SUB: Size = Size::new(242.0, 38.0);
+        let left = mouse::Button::Left;
+        let destroyed =
+            |m: &Message| matches!(m, Message::Surface(crate::surface::Action::DestroyPopup(_)));
+        let popup_ui = |messages: &[Message], size, renderer: &mut crate::Renderer| {
+            let view = messages
+                .iter()
+                .find_map(|m| match m {
+                    Message::Surface(crate::surface::Action::Popup(_, _, Some(view))) => {
+                        Some(view.clone())
+                    }
+                    _ => None,
+                })
+                .expect("a native popup");
+            UserInterface::build(view(), size, Cache::default(), renderer)
+        };
+        let app = |messages: Vec<crate::Action<Message>>| -> Vec<Message> {
+            messages
+                .into_iter()
+                .filter_map(|m| match m {
+                    crate::Action::App(m) => Some(m),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        let mut renderer = renderer();
+        let mut ui = UserInterface::build(
+            page_with_folder(Some(window::Id::unique())),
+            FOLDER_WINDOW,
+            Cache::default(),
+            &mut renderer,
+        );
+
+        // The click leaves the submenu usable, and its entry acts and closes the menu
+        let (opened, _) = click(&mut ui, &mut renderer, ON_PAGE, mouse::Button::Right);
+        let mut top = popup_ui(&opened, TOP, &mut renderer);
+        let shown = app(hover(&mut top, &mut renderer, RECENT));
+        let mut sub = popup_ui(&shown, SUB, &mut renderer);
+        let messages = app(click(&mut top, &mut renderer, RECENT, left).0);
+        assert!(!has(&messages, destroyed), "the click closed the menu");
+        _ = hover(&mut sub, &mut renderer, FIRST);
+        let messages = app(click(&mut sub, &mut renderer, FIRST, left).0);
+        assert!(has(&messages, |m| matches!(m, Message::Item("First"))));
+        assert!(has(&messages, destroyed), "the entry closed the menu");
+
+        // With a submenu open and clicked, a click in the window only closes the menu
+        let (opened, _) = click(&mut ui, &mut renderer, ON_PAGE, mouse::Button::Right);
+        let mut top = popup_ui(&opened, TOP, &mut renderer);
+        _ = hover(&mut top, &mut renderer, RECENT);
+        _ = click(&mut top, &mut renderer, RECENT, left);
+        let (messages, captured) = click(&mut ui, &mut renderer, UNDER, left);
+        assert!(captured && !has(&messages, |m| matches!(m, Message::Click)));
+        assert!(has(&messages, destroyed));
+
+        // An entry beside a submenu entry acts and closes the menu, as before
+        let (opened, _) = click(&mut ui, &mut renderer, ON_PAGE, mouse::Button::Right);
+        let mut top = popup_ui(&opened, TOP, &mut renderer);
+        _ = hover(&mut top, &mut renderer, RECENT);
+        _ = hover(&mut top, &mut renderer, OPEN);
+        let messages = app(click(&mut top, &mut renderer, OPEN, left).0);
+        assert!(has(&messages, |m| matches!(m, Message::Item("Open"))));
+        assert!(has(&messages, destroyed), "the entry closed the menu");
     }
 
     /// Twenty 40 px rows, 240 px wide: an 800 px menu
