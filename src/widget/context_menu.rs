@@ -1146,4 +1146,102 @@ mod tests {
         let (messages, _) = click(&mut ui, &mut renderer, UNDER, mouse::Button::Left);
         assert!(has(&messages, |m| matches!(m, Message::Click)));
     }
+
+    /// Twenty 40 px rows, 240 px wide: an 800 px menu
+    fn tall_menu() -> Vec<menu::Tree<Message>> {
+        (0..20)
+            .map(|_| {
+                menu::Tree::new(crate::Element::from(
+                    crate::widget::container(crate::widget::text("Row")).height(40),
+                ))
+            })
+            .collect()
+    }
+
+    /// Where an in-window menu lies, in the window, after a right click at `at`
+    fn in_window_menu_at(window: Size, at: Point) -> iced::Rectangle {
+        let renderer = renderer();
+        let page = crate::widget::container(crate::widget::text("Page"))
+            .width(Length::Fill)
+            .height(Length::Fill);
+        let mut element = crate::Element::from(context_menu(page, Some(tall_menu())));
+        let mut tree = Tree::new(&element);
+        element.as_widget_mut().diff(&mut tree);
+        let node = element.as_widget_mut().layout(
+            &mut tree,
+            &renderer,
+            &iced_core::layout::Limits::new(Size::ZERO, window),
+        );
+        let layout = iced_core::Layout::new(&node);
+        let viewport = iced::Rectangle::with_size(window);
+        let cursor = mouse::Cursor::Available(at);
+        let mut messages = Vec::new();
+        let mut clipboard = iced_core::clipboard::Null;
+        let mut shell = iced_core::Shell::new(&mut messages);
+        element.as_widget_mut().update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Right)),
+            layout,
+            cursor,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+            &viewport,
+        );
+        let mut overlay = element
+            .as_widget_mut()
+            .overlay(&mut tree, layout, &renderer, &viewport, Vector::ZERO)
+            .expect("the menu is open");
+        // The menu places itself on the first event it sees
+        let unplaced = overlay.as_overlay_mut().layout(&renderer, window);
+        overlay.as_overlay_mut().update(
+            &Event::Mouse(mouse::Event::CursorMoved { position: at }),
+            iced_core::Layout::new(&unplaced),
+            cursor,
+            &renderer,
+            &mut clipboard,
+            &mut shell,
+        );
+        overlay
+            .as_overlay_mut()
+            .layout(&renderer, window)
+            .children()[0]
+            .bounds()
+    }
+
+    #[test]
+    fn an_in_window_menu_that_fits_opens_at_the_pointer() {
+        let window = Size::new(1000.0, 1000.0);
+        // Down and to the right of the pointer, as the 1 x 1 anchor puts it
+        let menu = in_window_menu_at(window, Point::new(100.0, 100.0));
+        assert_eq!(menu.position(), Point::new(100.0, 101.0));
+        // Flipped up beside the pointer: there is room above, none below
+        let menu = in_window_menu_at(window, Point::new(100.0, 900.0));
+        assert_eq!(menu.position(), Point::new(100.0, 100.0));
+    }
+
+    #[test]
+    fn an_in_window_menu_shifts_just_enough_to_stay_inside() {
+        let window = Size::new(1000.0, 1000.0);
+        // Flipped up, it would start at y = -200: it comes down to the top
+        let menu = in_window_menu_at(window, Point::new(100.0, 600.0));
+        assert_eq!((menu.y, menu.height), (0.0, 800.0));
+        // Opened down, it would end at 1251: it goes up to end at the bottom
+        let menu = in_window_menu_at(window, Point::new(100.0, 450.0));
+        assert_eq!((menu.y, menu.height), (200.0, 800.0));
+        // Across as well: opened right at x = 100, 240 px wide, it would end
+        // at 340 in a 300 px window
+        let menu = in_window_menu_at(Size::new(300.0, 1000.0), Point::new(100.0, 100.0));
+        assert_eq!(menu.x, 60.0);
+    }
+
+    #[test]
+    fn an_in_window_menu_taller_than_the_window_is_not_moved() {
+        let window = Size::new(1000.0, 500.0);
+        // It scrolls from where it opened, as it always has
+        let menu = in_window_menu_at(window, Point::new(100.0, 300.0));
+        assert_eq!(menu.y, -500.0);
+        let menu = in_window_menu_at(window, Point::new(100.0, 100.0));
+        assert_eq!(menu.y, 101.0);
+    }
 }
