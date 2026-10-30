@@ -512,6 +512,10 @@ impl<Message: 'static + Clone> Widget<Message, crate::Theme, crate::Renderer>
                     state.view_cursor = cursor;
                 }
             });
+            // Esc closed the menu and ends here: the app's Esc shortcut does not run too
+            if matches!(event, Event::Keyboard(_)) {
+                shell.capture_event();
+            }
         }
 
         if !was_open && cursor.is_over(bounds) {

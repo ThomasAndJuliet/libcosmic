@@ -70,7 +70,8 @@ Each commit says where it came from, using an `Origin:` line or a household-ui p
   to the original").
 - **context_menu:** native popups are anchored at the window cursor in scrolled views;
   menus inherit the window currently building them, as text-field menus do,
-  instead of targeting the reserved placeholder window.
+  instead of targeting the reserved placeholder window; the Esc that closes a
+  menu is captured, so an app's Esc shortcut does not run too.
 - **segmented_button:**
   - the tab-drag candidate is forgotten on click;
   - a `handle_event` refactor;
