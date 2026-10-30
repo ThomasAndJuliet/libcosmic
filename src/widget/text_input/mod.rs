@@ -7,6 +7,8 @@
 pub mod cursor;
 pub mod editor;
 mod input;
+#[cfg(test)]
+mod key_tests;
 mod style;
 pub mod value;
 
