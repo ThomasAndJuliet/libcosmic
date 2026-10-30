@@ -193,6 +193,13 @@ Juliet, 25 Oct: "the fork carries small bug fixes". Each commit has an `Origin:`
   Deductum, Marginalium). An unchosen part still takes the hover's colour. The
   built-in styles' hover text colour is their active one, so they look as
   before.
+- **segmented_button:** a horizontal control built with dividers (as
+  `segmented_control::horizontal` builds it) draws them in any style, not only
+  in `Control`, so a `Custom` style that starts from `Control`'s appearance
+  keeps the 1 px dividers between parts (Marginalium lost the one between two
+  unchosen parts). Only `segmented_control` turns dividers on, always with
+  `Control`, so the built-in looks are unchanged. The chosen part's tick is
+  still `Control`'s alone.
 
 ## CI
 

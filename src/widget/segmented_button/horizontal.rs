@@ -67,8 +67,6 @@ where
                 / num as f32;
         }
 
-        let is_control = matches!(self.style, crate::theme::SegmentedButton::Control);
-
         Box::new(
             self.model
                 .order
@@ -93,7 +91,9 @@ where
                     let button_bounds = ItemBounds::Button(key, layout_bounds);
                     let mut divider = None;
 
-                    if self.dividers && is_control && nth + 1 < num {
+                    // The dividers the control was built with, whatever its
+                    // style: a custom style keeps them as `Control` draws them.
+                    if self.dividers && nth + 1 < num {
                         divider = Some(ItemBounds::Divider(
                             Rectangle {
                                 width: 1.0,
