@@ -2102,6 +2102,11 @@ pub fn update<'a, Message: Clone + 'static>(
                     state.is_pasting = None;
 
                     if !state.keyboard_modifiers.command() && !modifiers.control() {
+                        // Not typing, and not ours: the app's shortcuts get it
+                        if platform::is_shortcut_modifier_pressed(modifiers) {
+                            return;
+                        }
+
                         let mut editor = Editor::new(unsecured_value, &mut state.cursor);
 
                         editor.insert(c);
@@ -3495,6 +3500,14 @@ mod platform {
         } else {
             modifiers.control()
         }
+    }
+
+    /// Whether a key held with these is a shortcut, for the modifiers other
+    /// than Ctrl and Command. Super never types. Alt doesn't on Linux, where
+    /// AltGr is a level of its own and not Alt, but Option types on macOS.
+    #[inline]
+    pub fn is_shortcut_modifier_pressed(modifiers: keyboard::Modifiers) -> bool {
+        modifiers.logo() || (modifiers.alt() && !cfg!(target_os = "macos"))
     }
 }
 

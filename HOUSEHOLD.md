@@ -68,6 +68,10 @@ Each commit says where it came from, using an `Origin:` line or a household-ui p
   colour for the text. The household colour rule for selections lives in
   the apps, through `household-tones` (Juliet, 25 Oct: "keep libcosmic close
   to the original").
+- **text_input (bug fix):** a key held with Alt or Super is not typed and is
+  not captured, so it reaches the app's shortcuts. Ctrl keys are refused as
+  before, and stay captured. Shift, AltGr (which xkb reports as level 3, not
+  Alt), dead keys and input methods still type; Option still types on macOS.
 - **context_menu:** native popups are anchored at the window cursor in scrolled views;
   menus inherit the window currently building them, as text-field menus do,
   instead of targeting the reserved placeholder window; the Esc that closes a
