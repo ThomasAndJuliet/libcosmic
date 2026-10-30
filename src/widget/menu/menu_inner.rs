@@ -221,6 +221,16 @@ impl Aod {
     }
 }
 
+/// How far a menu at `position` must move to lie wholly in `0..viewport`.
+/// A menu that is larger than the viewport stays where it is, and scrolls.
+fn shift_into_view(position: f32, size: f32, viewport: f32) -> f32 {
+    if size > viewport {
+        0.0
+    } else {
+        position.clamp(0.0, viewport - size) - position
+    }
+}
+
 /// A part of a menu where items are displayed.
 ///
 /// When the bounds of a menu exceed the viewport,
@@ -269,7 +279,11 @@ impl MenuBounds {
         let (children_position, offset_position) = {
             let (cp, op) = aod.resolve(view_parent_bounds, children_size, viewport_size);
             if is_overlay {
-                (cp - overlay_offset, op - overlay_offset)
+                let shift = Vector::new(
+                    shift_into_view(cp.x, children_size.width, viewport_size.width),
+                    shift_into_view(cp.y, children_size.height, viewport_size.height),
+                );
+                (cp + shift - overlay_offset, op + shift - overlay_offset)
             } else {
                 (Point::ORIGIN, op - overlay_offset)
             }

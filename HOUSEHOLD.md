@@ -121,6 +121,7 @@ Each commit carries the number of the household-ui proposal it answers, or an `I
   - the menu bar diffs its roots' own trees, which fixes a panic when the roots change kind (#24);
   - the press that closes a menu is swallowed, for both in-window and native popups (#17).
   - an open menu whose items change under it takes its items' slots again from the tree it shows: a shorter menu no longer indexes past its end (a panic in Lollypop, 25 Oct), and a longer one, or one whose items changed kind, is no longer drawn in the old slots; a submenu whose item is gone closes.
+  - an in-window menu that fits the window but not beside its anchor shifts just enough to lie wholly inside it; one that fits there, and one taller than the window, open as before.
 - **button:** overlays of a button's content (a tooltip on a row's title, the heart's tooltip in a row) open at the content, not a button's offset away: the button passes the translation on as iced's containers do.
 - **cosmic-theme:**
   - a partially saved theme is filled from its own mode's defaults;
