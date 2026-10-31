@@ -3288,3 +3288,260 @@ fn is_lifted(event: &Event) -> bool {
 fn touch_lifted(event: &Event) -> bool {
     matches!(event, Event::Touch(touch::Event::FingerLifted { .. }))
 }
+
+#[cfg(all(test, wayland_platform))]
+mod context_menu_tests {
+    use super::*;
+    use crate::widget::menu::{self, Item as Entry};
+    use crate::widget::segmented_button;
+    use iced::advanced::renderer::Headless;
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    #[derive(Clone)]
+    enum Message {
+        Context,
+        Picked(&'static str),
+        Under,
+        Surface(crate::surface::Action<Self>),
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum Pick {
+        Open,
+        First,
+    }
+
+    impl menu::Action for Pick {
+        type Message = Message;
+
+        fn message(&self) -> Message {
+            Message::Picked(match self {
+                Self::Open => "Open",
+                Self::First => "First",
+            })
+        }
+    }
+
+    /// A tab with a context menu of real entries, 36 px high and 240 wide: Recent >,
+    /// with First in it, then Open. Then a button along the whole window.
+    fn tab_then_button(
+        model: &segmented_button::SingleSelectModel,
+        window: Option<window::Id>,
+    ) -> crate::Element<'_, Message> {
+        let menus = menu::nav_context(
+            &std::collections::HashMap::new(),
+            vec![vec![
+                Entry::Folder("Recent", vec![Entry::Button("First", None, Pick::First)]),
+                Entry::Button("Open", None, Pick::Open),
+            ]],
+        );
+        let mut tabs = segmented_button::horizontal(model)
+            .width(Length::Fill)
+            .context_menu(Some(menus))
+            .on_context(|_| Message::Context);
+        if let Some(window) = window {
+            tabs = tabs.window_id(window).on_surface_action(Message::Surface);
+        }
+        crate::widget::column::with_children(vec![
+            tabs.into(),
+            crate::widget::button::text("Under")
+                .on_press(Message::Under)
+                .width(Length::Fill)
+                .height(40)
+                .into(),
+        ])
+        .into()
+    }
+
+    const WINDOW: iced::Size = iced::Size::new(800.0, 400.0);
+    const TAB: Point = Point::new(30.0, 16.0);
+    const UNDER: Point = Point::new(100.0, 50.0);
+
+    fn renderer() -> crate::Renderer {
+        iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
+            iced::Font::default(),
+            iced::Pixels(14.0),
+            Some("tiny-skia"),
+        ))
+        .expect("a headless renderer")
+    }
+
+    fn model() -> segmented_button::SingleSelectModel {
+        segmented_button::Model::builder()
+            .insert(|b| b.text("One"))
+            .build()
+    }
+
+    fn hover<M>(
+        ui: &mut UserInterface<'_, M, crate::Theme, crate::Renderer>,
+        renderer: &mut crate::Renderer,
+        at: Point,
+    ) -> Vec<M> {
+        let mut messages = Vec::new();
+        _ = ui.update(
+            &[Event::Mouse(mouse::Event::CursorMoved { position: at })],
+            mouse::Cursor::Available(at),
+            renderer,
+            &mut iced_core::clipboard::Null,
+            &mut messages,
+        );
+        messages
+    }
+
+    /// Moves to `at`, then presses and releases `button` there, one frame each.
+    fn click<M>(
+        ui: &mut UserInterface<'_, M, crate::Theme, crate::Renderer>,
+        renderer: &mut crate::Renderer,
+        at: Point,
+        button: mouse::Button,
+    ) -> Vec<M> {
+        let mut messages = hover(ui, renderer, at);
+        for event in [
+            mouse::Event::ButtonPressed(button),
+            mouse::Event::ButtonReleased(button),
+        ] {
+            _ = ui.update(
+                &[Event::Mouse(event)],
+                mouse::Cursor::Available(at),
+                renderer,
+                &mut iced_core::clipboard::Null,
+                &mut messages,
+            );
+        }
+        messages
+    }
+
+    fn picked(messages: &[Message], name: &str) -> bool {
+        messages
+            .iter()
+            .any(|m| matches!(m, Message::Picked(n) if *n == name))
+    }
+
+    fn under(messages: &[Message]) -> bool {
+        messages.iter().any(|m| matches!(m, Message::Under))
+    }
+
+    fn destroyed(messages: &[Message]) -> bool {
+        messages
+            .iter()
+            .any(|m| matches!(m, Message::Surface(crate::surface::Action::DestroyPopup(_))))
+    }
+
+    fn popup_ui(
+        messages: &[Message],
+        size: iced::Size,
+        renderer: &mut crate::Renderer,
+    ) -> UserInterface<'static, crate::Action<Message>, crate::Theme, crate::Renderer> {
+        let view = messages
+            .iter()
+            .find_map(|m| match m {
+                Message::Surface(crate::surface::Action::Popup(_, _, Some(view))) => {
+                    Some(view.clone())
+                }
+                _ => None,
+            })
+            .expect("a native popup");
+        UserInterface::build(view(), size, Cache::default(), renderer)
+    }
+
+    fn app(messages: Vec<crate::Action<Message>>) -> Vec<Message> {
+        messages
+            .into_iter()
+            .filter_map(|m| match m {
+                crate::Action::App(m) => Some(m),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_click_on_a_submenu_entry_keeps_an_in_window_tab_menu_open() {
+        // A tab as wide as the window: the menu keeps to its right edge, and the
+        // submenu opens to the left
+        const RECENT: Point = Point::new(680.0, 34.0);
+        const OPEN: Point = Point::new(680.0, 70.0);
+        const FIRST: Point = Point::new(440.0, 34.0);
+        let left = mouse::Button::Left;
+
+        let model = model();
+        let mut renderer = renderer();
+        let mut ui = UserInterface::build(
+            tab_then_button(&model, None),
+            WINDOW,
+            Cache::default(),
+            &mut renderer,
+        );
+
+        // The click leaves the submenu usable, and its entry acts and closes the menu
+        let opened = click(&mut ui, &mut renderer, TAB, mouse::Button::Right);
+        assert!(opened.iter().any(|m| matches!(m, Message::Context)));
+        _ = hover(&mut ui, &mut renderer, RECENT);
+        _ = click(&mut ui, &mut renderer, RECENT, left);
+        _ = hover(&mut ui, &mut renderer, FIRST);
+        let messages = click(&mut ui, &mut renderer, FIRST, left);
+        assert!(picked(&messages, "First"), "the click on Recent closed the menu");
+        assert!(under(&click(&mut ui, &mut renderer, UNDER, left)), "the entry closed the menu");
+
+        // With a submenu open and clicked, a click elsewhere only closes the menu
+        _ = click(&mut ui, &mut renderer, TAB, mouse::Button::Right);
+        _ = hover(&mut ui, &mut renderer, RECENT);
+        _ = click(&mut ui, &mut renderer, RECENT, left);
+        assert!(!under(&click(&mut ui, &mut renderer, UNDER, left)));
+        assert!(under(&click(&mut ui, &mut renderer, UNDER, left)), "the click closed the menu");
+
+        // An entry beside a submenu entry acts and closes the menu, as before
+        _ = click(&mut ui, &mut renderer, TAB, mouse::Button::Right);
+        _ = hover(&mut ui, &mut renderer, RECENT);
+        _ = hover(&mut ui, &mut renderer, OPEN);
+        assert!(picked(&click(&mut ui, &mut renderer, OPEN, left), "Open"));
+        assert!(under(&click(&mut ui, &mut renderer, UNDER, left)), "the entry closed the menu");
+    }
+
+    #[test]
+    fn a_click_on_a_submenu_entry_keeps_a_native_tab_menu_open() {
+        use crate::app::cosmic::{WINDOWING_SYSTEM, WindowingSystem};
+        _ = WINDOWING_SYSTEM.set(WindowingSystem::Wayland);
+        // In each popup's own coordinates
+        const FIRST_ROW: Point = Point::new(120.0, 18.0);
+        const SECOND_ROW: Point = Point::new(120.0, 54.0);
+        const TOP: iced::Size = iced::Size::new(242.0, 74.0);
+        const SUB: iced::Size = iced::Size::new(242.0, 38.0);
+        let left = mouse::Button::Left;
+
+        let model = model();
+        let mut renderer = renderer();
+        let mut ui = UserInterface::build(
+            tab_then_button(&model, Some(window::Id::unique())),
+            WINDOW,
+            Cache::default(),
+            &mut renderer,
+        );
+
+        // The click leaves the submenu usable, and its entry acts and closes the menu
+        let opened = click(&mut ui, &mut renderer, TAB, mouse::Button::Right);
+        let mut top = popup_ui(&opened, TOP, &mut renderer);
+        let shown = app(hover(&mut top, &mut renderer, FIRST_ROW));
+        let mut sub = popup_ui(&shown, SUB, &mut renderer);
+        let messages = app(click(&mut top, &mut renderer, FIRST_ROW, left));
+        assert!(!destroyed(&messages), "the click closed the menu");
+        _ = hover(&mut sub, &mut renderer, FIRST_ROW);
+        let messages = app(click(&mut sub, &mut renderer, FIRST_ROW, left));
+        assert!(picked(&messages, "First"), "the click on Recent closed the menu");
+        assert!(destroyed(&messages), "the entry closed the menu");
+
+        // An entry beside a submenu entry acts and closes the menu, as before
+        let opened = click(&mut ui, &mut renderer, TAB, mouse::Button::Right);
+        let mut top = popup_ui(&opened, TOP, &mut renderer);
+        _ = hover(&mut top, &mut renderer, FIRST_ROW);
+        _ = hover(&mut top, &mut renderer, SECOND_ROW);
+        let messages = app(click(&mut top, &mut renderer, SECOND_ROW, left));
+        assert!(picked(&messages, "Open") && destroyed(&messages));
+
+        // With a submenu open and clicked, a press on the tab bar only closes the menu
+        let opened = click(&mut ui, &mut renderer, TAB, mouse::Button::Right);
+        let mut top = popup_ui(&opened, TOP, &mut renderer);
+        _ = hover(&mut top, &mut renderer, FIRST_ROW);
+        _ = click(&mut top, &mut renderer, FIRST_ROW, left);
+        assert!(destroyed(&click(&mut ui, &mut renderer, TAB, left)));
+    }
+}
