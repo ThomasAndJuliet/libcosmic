@@ -26,15 +26,19 @@ fn rgb(colour: impl Into<Color>) -> u32 {
     u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)
 }
 
-/// Lets `prepare` act on the widget tree, lays `element` out, focuses `id`,
-/// draws it and returns the RGBA pixels
-fn render(mut element: Element<'_, ()>, id: &Id, prepare: impl FnOnce(&mut Tree)) -> Vec<u8> {
-    let mut renderer = iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
+fn renderer() -> crate::Renderer {
+    iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
         crate::font::default(),
         Pixels(14.0),
         Some("tiny-skia"),
     ))
-    .expect("a headless tiny-skia renderer");
+    .expect("a headless tiny-skia renderer")
+}
+
+/// Lets `prepare` act on the widget tree, lays `element` out, focuses `id`,
+/// draws it and returns the RGBA pixels
+fn render(mut element: Element<'_, ()>, id: &Id, prepare: impl FnOnce(&mut Tree)) -> Vec<u8> {
+    let mut renderer = renderer();
     let theme = theme();
     let bounds = Rectangle::with_size(Size::new(SIZE.width as f32, SIZE.height as f32));
     let mut tree = Tree::new(&element);
@@ -182,4 +186,360 @@ fn text_input_selection_covers_the_unselected_text() {
         rgb(cosmic.accent_color()),
         rgb(cosmic.on_accent_color()),
     );
+}
+
+// Native menu operations share these selection fixtures with the rendering tests.
+use crate::widget::text_context_menu::{HasSelectableText, TextAction, TextMenuTarget};
+use iced_core::widget::Widget;
+use iced_core::{Clipboard, Event, Shell, clipboard, window};
+
+#[derive(Default)]
+struct MenuClipboard {
+    text: Option<String>,
+    writes: Vec<String>,
+}
+
+impl Clipboard for MenuClipboard {
+    fn read(&self, _: clipboard::Kind) -> Option<String> {
+        self.text.clone()
+    }
+
+    fn write(&mut self, _: clipboard::Kind, text: String) {
+        self.writes.push(text.clone());
+        self.text = Some(text);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum MenuMessage {
+    Input(String),
+    Paste(String),
+    Edit(widget::text_editor::Action),
+}
+
+fn target_tree(target: &mut impl Widget<MenuMessage, Theme, crate::Renderer>) -> Tree {
+    let mut tree = Tree::new(&*target as &dyn Widget<MenuMessage, Theme, crate::Renderer>);
+    target.diff(&mut tree);
+    tree
+}
+
+fn menu_action(
+    target: &mut impl TextMenuTarget<MenuMessage>,
+    tree: &mut Tree,
+    action: TextAction,
+    clipboard: &mut MenuClipboard,
+) -> Vec<MenuMessage> {
+    let mut messages = Vec::new();
+    target.execute_text_menu_action(tree, action, clipboard, &mut Shell::new(&mut messages));
+    messages
+}
+
+fn redraw_target(
+    target: &mut impl Widget<MenuMessage, Theme, crate::Renderer>,
+    tree: &mut Tree,
+    renderer: &crate::Renderer,
+    clipboard: &mut MenuClipboard,
+) -> Vec<MenuMessage> {
+    let bounds = Rectangle::with_size(Size::new(260.0, 80.0));
+    let node = target.layout(tree, renderer, &Limits::new(Size::ZERO, bounds.size()));
+    let mut messages = Vec::new();
+    target.update(
+        tree,
+        &Event::Window(window::Event::RedrawRequested(
+            iced_core::time::Instant::now(),
+        )),
+        Layout::new(&node),
+        mouse::Cursor::Unavailable,
+        renderer,
+        clipboard,
+        &mut Shell::new(&mut messages),
+        &bounds,
+    );
+    messages
+}
+
+#[test]
+fn text_menu_secure_input_rejects_copy_and_cut_after_opening() {
+    let mut input = widget::text_input("", "secret").on_input(MenuMessage::Input);
+    let mut tree = target_tree(&mut input);
+    tree.state
+        .downcast_mut::<widget::text_input::State>()
+        .select_all();
+    assert!(input.text_menu_context(&tree).allows(TextAction::Copy));
+    let mut input = input.password();
+    let mut clipboard = MenuClipboard::default();
+    for action in [TextAction::Copy, TextAction::Cut] {
+        assert!(menu_action(&mut input, &mut tree, action, &mut clipboard).is_empty());
+    }
+    assert!(
+        clipboard.writes.is_empty(),
+        "a stale menu cannot export a password"
+    );
+    assert_eq!(
+        tree.state
+            .downcast_ref::<widget::text_input::State>()
+            .tracked_value
+            .to_string(),
+        "secret"
+    );
+    assert!(
+        input.selected_text(&tree).is_none(),
+        "the legacy copy path must also hide passwords"
+    );
+}
+
+#[test]
+fn text_menu_read_only_input_rechecks_permissions_before_editing() {
+    let mut input = widget::text_input("", "kept").on_input(MenuMessage::Input);
+    let mut tree = target_tree(&mut input);
+    tree.state
+        .downcast_mut::<widget::text_input::State>()
+        .select_all();
+    assert!(input.text_menu_context(&tree).allows(TextAction::Cut));
+    let mut input = widget::text_input("", "kept")
+        .on_input(MenuMessage::Input)
+        .editing(false);
+    let mut clipboard = MenuClipboard {
+        text: Some("replacement".into()),
+        ..Default::default()
+    };
+    for action in [TextAction::Cut, TextAction::Paste] {
+        assert!(menu_action(&mut input, &mut tree, action, &mut clipboard).is_empty());
+    }
+    assert!(clipboard.writes.is_empty());
+    assert_eq!(
+        tree.state
+            .downcast_ref::<widget::text_input::State>()
+            .tracked_value
+            .to_string(),
+        "kept"
+    );
+    menu_action(&mut input, &mut tree, TextAction::Copy, &mut clipboard);
+    assert_eq!(clipboard.writes, ["kept"]);
+
+    let mut disabled = widget::text_input("", "kept");
+    assert!(!disabled.text_menu_context(&tree).allows(TextAction::Cut));
+    assert!(menu_action(&mut disabled, &mut tree, TextAction::Paste, &mut clipboard).is_empty());
+}
+
+#[test]
+fn text_menu_paste_filters_controls_replaces_selection_and_prefers_on_paste() {
+    let mut input = widget::text_input("", "aéz")
+        .on_input(MenuMessage::Input)
+        .on_paste(MenuMessage::Paste);
+    let mut tree = target_tree(&mut input);
+    tree.state
+        .downcast_mut::<widget::text_input::State>()
+        .select_range(1, 2);
+    let mut clipboard = MenuClipboard {
+        text: Some("世\n界\t".into()),
+        ..Default::default()
+    };
+    // The snapshot can be stale: execution must read the live clipboard.
+    assert!(!input.text_menu_context(&tree).clipboard_has_text);
+    assert_eq!(
+        menu_action(&mut input, &mut tree, TextAction::Paste, &mut clipboard),
+        [MenuMessage::Paste("a世界z".into())]
+    );
+    let state = tree.state.downcast_ref::<widget::text_input::State>();
+    assert_eq!(state.tracked_value.to_string(), "a世界z");
+    assert!(state.cursor().selection(&state.tracked_value).is_none());
+    assert!(
+        state.dirty,
+        "the native paragraph must be rebuilt after a menu edit"
+    );
+}
+
+#[test]
+fn text_menu_paste_uses_on_input_and_preserves_managed_values_without_callbacks() {
+    let mut input = widget::text_input("", "old").on_input(MenuMessage::Input);
+    let mut tree = target_tree(&mut input);
+    tree.state
+        .downcast_mut::<widget::text_input::State>()
+        .select_all();
+    let mut clipboard = MenuClipboard {
+        text: Some("new".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        menu_action(&mut input, &mut tree, TextAction::Paste, &mut clipboard),
+        [MenuMessage::Input("new".into())]
+    );
+    let mut managed = widget::text_input("", "").manage_value(true);
+    let mut tree = target_tree(&mut managed);
+    assert!(menu_action(&mut managed, &mut tree, TextAction::Paste, &mut clipboard).is_empty());
+    managed.diff(&mut tree);
+    assert_eq!(
+        tree.state
+            .downcast_ref::<widget::text_input::State>()
+            .tracked_value
+            .to_string(),
+        "new"
+    );
+    clipboard.text = None;
+    tree.state
+        .downcast_mut::<widget::text_input::State>()
+        .select_all();
+    menu_action(&mut managed, &mut tree, TextAction::Paste, &mut clipboard);
+    assert_eq!(
+        tree.state
+            .downcast_ref::<widget::text_input::State>()
+            .tracked_value
+            .to_string(),
+        "new",
+        "a vanished clipboard must not delete the selection"
+    );
+    clipboard.text = Some(String::new());
+    menu_action(&mut managed, &mut tree, TextAction::Paste, &mut clipboard);
+    assert_eq!(
+        tree.state
+            .downcast_ref::<widget::text_input::State>()
+            .tracked_value
+            .to_string(),
+        "new",
+        "an empty clipboard must not delete the selection"
+    );
+}
+
+#[test]
+fn text_menu_editor_emits_each_typed_action_once_before_another_event() {
+    use widget::text_editor::{Action, Edit};
+    let renderer = renderer();
+    let mut content = widget::text_editor::Content::with_text("selected");
+    content.perform(Action::SelectAll);
+    let mut editor = widget::text_editor::text_editor(&content).on_action(MenuMessage::Edit);
+    let mut tree = target_tree(&mut editor);
+    let mut clipboard = MenuClipboard {
+        text: Some("paste\ntext".into()),
+        ..Default::default()
+    };
+    for (choice, expected) in [
+        (TextAction::SelectAll, Action::SelectAll),
+        (TextAction::Cut, Action::Edit(Edit::Delete)),
+        (
+            TextAction::Paste,
+            Action::Edit(Edit::Paste(Arc::new("selected".into()))),
+        ),
+    ] {
+        assert_eq!(
+            menu_action(&mut editor, &mut tree, choice, &mut clipboard),
+            [MenuMessage::Edit(expected)]
+        );
+        assert!(
+            redraw_target(&mut editor, &mut tree, &renderer, &mut clipboard).is_empty(),
+            "the emitted menu action must not be retained for another event"
+        );
+        assert_eq!(
+            content.text(),
+            "selected",
+            "only the app performs edits on Content"
+        );
+    }
+    assert_eq!(clipboard.writes, ["selected"]);
+}
+
+#[test]
+fn text_menu_read_only_editor_selects_and_copies_without_granting_edits() {
+    let content = widget::text_editor::Content::with_text("read only");
+    let mut editor = widget::text_editor::text_editor(&content);
+    let mut tree = target_tree(&mut editor);
+    let mut clipboard = MenuClipboard {
+        text: Some("replacement".into()),
+        ..Default::default()
+    };
+    assert!(
+        menu_action(
+            &mut editor,
+            &mut tree,
+            TextAction::SelectAll,
+            &mut clipboard
+        )
+        .is_empty()
+    );
+    assert_eq!(content.selection().as_deref(), Some("read only"));
+    for choice in [TextAction::Cut, TextAction::Paste] {
+        assert!(menu_action(&mut editor, &mut tree, choice, &mut clipboard).is_empty());
+    }
+    menu_action(&mut editor, &mut tree, TextAction::Copy, &mut clipboard);
+    assert_eq!(clipboard.writes, ["read only"]);
+    assert_eq!(content.text(), "read only");
+}
+
+#[test]
+fn text_menu_selectable_text_only_copies_and_selects() {
+    let renderer = renderer();
+    let mut text = widget::selectable_text("copy only");
+    <_ as TextMenuTarget<MenuMessage>>::use_external_text_menu(&mut text);
+    let mut tree = target_tree(&mut text);
+    let mut clipboard = MenuClipboard {
+        text: Some("replacement".into()),
+        ..Default::default()
+    };
+    redraw_target(&mut text, &mut tree, &renderer, &mut clipboard);
+    menu_action(&mut text, &mut tree, TextAction::SelectAll, &mut clipboard);
+    for choice in [TextAction::Cut, TextAction::Paste] {
+        assert!(menu_action(&mut text, &mut tree, choice, &mut clipboard).is_empty());
+    }
+    menu_action(&mut text, &mut tree, TextAction::Copy, &mut clipboard);
+    assert_eq!(clipboard.writes, ["copy only"]);
+}
+
+fn external_menu_request(
+    target: &mut (impl Widget<MenuMessage, Theme, crate::Renderer> + TextMenuTarget<MenuMessage>),
+    renderer: &crate::Renderer,
+) {
+    target.use_external_text_menu();
+    let mut tree = target_tree(target);
+    let bounds = Rectangle::with_size(Size::new(260.0, 80.0));
+    let node = target.layout(&mut tree, renderer, &Limits::new(Size::ZERO, bounds.size()));
+    let layout = Layout::new(&node);
+    let at = layout.bounds().center();
+    let mut messages = Vec::new();
+    target.update(
+        &mut tree,
+        &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)),
+        layout,
+        mouse::Cursor::Available(at),
+        renderer,
+        &mut MenuClipboard::default(),
+        &mut Shell::new(&mut messages),
+        &bounds,
+    );
+    assert!(
+        target
+            .overlay(
+                &mut tree,
+                layout,
+                renderer,
+                &bounds,
+                iced_core::Vector::ZERO
+            )
+            .is_none(),
+        "external presentation must suppress the stock overlay"
+    );
+    assert_eq!(target.take_text_menu_request(&mut tree), Some(at));
+    assert_eq!(
+        target.take_text_menu_request(&mut tree),
+        None,
+        "each native request is consumed once"
+    );
+    #[cfg(wayland_platform)]
+    assert!(
+        crate::widget::text_context_menu::take_popup_requests(|_| true).is_empty(),
+        "external presentation must suppress stock native surfaces"
+    );
+}
+
+#[test]
+fn text_menu_external_presentation_preserves_native_requests() {
+    let renderer = renderer();
+    let mut input = widget::text_input("", "input").on_input(MenuMessage::Input);
+    external_menu_request(&mut input, &renderer);
+    let content = widget::text_editor::Content::with_text("editor");
+    let mut editor = widget::text_editor::text_editor(&content).on_action(MenuMessage::Edit);
+    external_menu_request(&mut editor, &renderer);
+    let mut text = widget::selectable_text("text");
+    external_menu_request(&mut text, &renderer);
+    let mut plain = widget::text("plain").selectable();
+    external_menu_request(&mut plain, &renderer);
 }

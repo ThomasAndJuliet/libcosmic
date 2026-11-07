@@ -33,11 +33,119 @@ use crate::{theme, widget};
 use iced_core::layout::Limits;
 use iced_core::widget::Tree;
 use iced_core::{
-    Clipboard, Layout, Point, Rectangle, Shell, Size, Vector, clipboard, mouse, overlay, renderer,
+    Clipboard, Layout, Point, Rectangle, Shell, Size, Vector, mouse, overlay, renderer,
 };
 use iced_widget::core::event;
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
+
+/// A built-in operation on a native text target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextAction {
+    Copy,
+    Cut,
+    Paste,
+    SelectAll,
+}
+
+// Keep the stock popup's internal vocabulary while sharing its executor.
+pub(crate) use TextAction as TextCtxAction;
+
+/// The native target's effective editing mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextKind {
+    Editable,
+    ReadOnlyInput,
+    Selectable,
+}
+
+/// Current capabilities, without exposing selected plaintext.
+///
+/// Clipboard availability is a snapshot for presentation. Executors read the
+/// clipboard and recheck the target's permissions when an action is chosen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextMenuContext {
+    pub kind: TextKind,
+    pub secure: bool,
+    pub has_selection: bool,
+    pub has_text: bool,
+    pub clipboard_has_text: bool,
+}
+
+impl TextMenuContext {
+    /// Whether an action can be offered in this snapshot.
+    pub fn allows(self, action: TextAction) -> bool {
+        match action {
+            TextAction::Copy => !self.secure && self.has_selection,
+            TextAction::Cut => {
+                self.kind == TextKind::Editable && !self.secure && self.has_selection
+            }
+            TextAction::Paste => self.kind == TextKind::Editable && self.clipboard_has_text,
+            TextAction::SelectAll => self.has_text,
+        }
+    }
+}
+
+/// Native selection and editing for a concrete text widget.
+///
+/// Configure the target before creating its widget tree. External presentation
+/// suppresses the stock menu while retaining native focus and request handling.
+/// Every executor checks live permissions, including after a view rebuild.
+pub trait TextMenuTarget<Message> {
+    fn use_external_text_menu(&mut self);
+    fn take_text_menu_request(&self, tree: &mut Tree) -> Option<Point>;
+    fn text_menu_context(&self, tree: &Tree) -> TextMenuContext;
+    fn execute_text_menu_action(
+        &mut self,
+        tree: &mut Tree,
+        action: TextAction,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+    );
+}
+
+impl<Message, Theme, Renderer> TextMenuTarget<Message>
+    for iced_core::widget::Text<'_, Theme, Renderer>
+where
+    Theme: iced_core::widget::text::Catalog,
+    Renderer: iced_core::text::Renderer,
+{
+    fn use_external_text_menu(&mut self) {}
+
+    fn take_text_menu_request(&self, tree: &mut Tree) -> Option<Point> {
+        let position = self.context_menu_position(tree);
+        self.set_context_menu_position(tree, None);
+        position
+    }
+
+    fn text_menu_context(&self, tree: &Tree) -> TextMenuContext {
+        TextMenuContext {
+            kind: TextKind::Selectable,
+            secure: false,
+            has_selection: self.is_selectable() && self.selected_text(tree).is_some(),
+            has_text: self.is_selectable() && self.has_text(tree),
+            clipboard_has_text: self.clipboard_has_text(tree),
+        }
+    }
+
+    fn execute_text_menu_action(
+        &mut self,
+        tree: &mut Tree,
+        action: TextAction,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+    ) {
+        if !<Self as TextMenuTarget<Message>>::text_menu_context(self, tree).allows(action) {
+            return;
+        }
+        match action {
+            TextAction::Copy => self.copy_to_clipboard(tree, clipboard),
+            TextAction::SelectAll => self.select_all(tree),
+            TextAction::Cut | TextAction::Paste => return,
+        }
+        shell.request_redraw();
+    }
+}
 
 /// Shared state for communicating deferred context menu actions
 /// from a Wayland popup back to the owning text widget.
@@ -70,7 +178,6 @@ pub(crate) struct PopupRequest {
     live_settings: LiveSettings,
     settings: SctkPopupSettings,
     menu: Menu<'static, TextCtxAction>,
-    selected_text: Option<String>,
     pending_action: PendingAction,
 }
 
@@ -116,7 +223,6 @@ pub(crate) fn into_popup_view<Message: Clone + 'static>(
     let PopupRequest {
         settings,
         menu,
-        selected_text,
         pending_action,
         live_settings,
     } = req;
@@ -124,7 +230,6 @@ pub(crate) fn into_popup_view<Message: Clone + 'static>(
     let view = Box::new(move || {
         let popup_widget: TextContextMenuPopup<Message> = TextContextMenuPopup {
             menu: menu.clone(),
-            selected_text: selected_text.clone(),
             pending_action: pending_action.clone(),
             _phantom: std::marker::PhantomData,
         };
@@ -249,32 +354,23 @@ pub(crate) fn forget_popup_requests(
 /// Creates a context menu overlay for any widget implementing
 /// [`HasSelectableText`].
 ///
-/// Call this from your widget's `overlay()` method. Pass `on_input` for
-/// editable widgets so Cut and Paste can publish text-change messages.
+/// Call this from your widget's `overlay()` method. Built-in choices execute
+/// through the target's native editing and callback path.
 ///
 /// The `menu_bar_state` parameter must be a persistent [`MenuBarState`]
 /// stored in the widget's tree state.
 pub(crate) fn context_menu_overlay<'a, W, Message>(
-    widget: &'a W,
+    widget: &'a mut W,
     tree: &'a mut Tree,
-    on_input: Option<&'a dyn Fn(String) -> Message>,
     translation: Vector,
     menu_bar_state: MenuBarState,
 ) -> Option<overlay::Element<'a, Message, crate::Theme, crate::Renderer>>
 where
-    W: HasSelectableText + 'a,
+    W: TextMenuTarget<Message> + HasSelectableText + 'a,
     Message: Clone + 'static,
 {
     let click_position = widget.context_menu_position(tree)?;
-    let selected_text = widget.selected_text(tree);
-    let is_editable = widget.is_editable();
-
-    let mut menu_roots = build_menu_roots(
-        is_editable,
-        selected_text.is_some(),
-        widget.has_text(tree),
-        widget.clipboard_has_text(tree),
-    );
+    let mut menu_roots = build_menu_roots(widget.text_menu_context(tree));
     menu_roots.iter_mut().for_each(menu::Tree::set_index);
 
     let bounds = Rectangle {
@@ -328,24 +424,12 @@ where
         menu,
         widget,
         tree,
-        on_input,
+        _message: std::marker::PhantomData,
     })))
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TextCtxAction {
-    Copy,
-    Cut,
-    Paste,
-    SelectAll,
-}
-
-fn build_menu_roots(
-    is_editable: bool,
-    has_selection: bool,
-    has_text: bool,
-    clipboard_has_text: bool,
-) -> Vec<menu::Tree<TextCtxAction>> {
+fn build_menu_roots(context: TextMenuContext) -> Vec<menu::Tree<TextCtxAction>> {
+    let is_editable = context.kind == TextKind::Editable;
     let item = |label: &'static str, action: TextCtxAction, enabled: bool| {
         menu::Tree::from(crate::Element::from(
             menu::menu_button(vec![widget::text(label).into()])
@@ -355,13 +439,29 @@ fn build_menu_roots(
 
     let mut items = Vec::with_capacity(4);
     if is_editable {
-        items.push(item("Cut", TextCtxAction::Cut, has_selection));
+        items.push(item(
+            "Cut",
+            TextCtxAction::Cut,
+            context.allows(TextAction::Cut),
+        ));
     }
-    items.push(item("Copy", TextCtxAction::Copy, has_selection));
+    items.push(item(
+        "Copy",
+        TextCtxAction::Copy,
+        context.allows(TextAction::Copy),
+    ));
     if is_editable {
-        items.push(item("Paste", TextCtxAction::Paste, clipboard_has_text));
+        items.push(item(
+            "Paste",
+            TextCtxAction::Paste,
+            context.allows(TextAction::Paste),
+        ));
     }
-    items.push(item("Select All", TextCtxAction::SelectAll, has_text));
+    items.push(item(
+        "Select All",
+        TextCtxAction::SelectAll,
+        context.allows(TextAction::SelectAll),
+    ));
 
     vec![menu::Tree::with_children(
         RcElementWrapper::new(crate::Element::from(widget::Row::new())),
@@ -371,15 +471,15 @@ fn build_menu_roots(
 
 struct TextMenuOverlay<'a, W, Message: Clone + 'static> {
     menu: Menu<'a, TextCtxAction>,
-    widget: &'a W,
+    widget: &'a mut W,
     tree: &'a mut Tree,
-    on_input: Option<&'a dyn Fn(String) -> Message>,
+    _message: std::marker::PhantomData<Message>,
 }
 
 impl<W, Message> overlay::Overlay<Message, crate::Theme, crate::Renderer>
     for TextMenuOverlay<'_, W, Message>
 where
-    W: HasSelectableText,
+    W: TextMenuTarget<Message> + HasSelectableText,
     Message: Clone + 'static,
 {
     fn layout(&mut self, renderer: &crate::Renderer, bounds: Size) -> iced_core::layout::Node {
@@ -481,32 +581,8 @@ where
         }
 
         for action in local_messages {
-            match action {
-                TextCtxAction::Copy => {
-                    self.widget.copy_to_clipboard(self.tree, clipboard);
-                }
-                TextCtxAction::Cut => {
-                    self.widget.copy_to_clipboard(self.tree, clipboard);
-                    if let Some(contents) = self.widget.delete_selection(self.tree) {
-                        if let Some(on_input) = self.on_input {
-                            shell.publish((on_input)(contents));
-                        }
-                    }
-                }
-                TextCtxAction::Paste => {
-                    let content: String = clipboard
-                        .read(clipboard::Kind::Standard)
-                        .unwrap_or_default();
-                    if let Some(contents) = self.widget.paste_text(self.tree, &content) {
-                        if let Some(on_input) = self.on_input {
-                            shell.publish((on_input)(contents));
-                        }
-                    }
-                }
-                TextCtxAction::SelectAll => {
-                    self.widget.select_all(self.tree);
-                }
-            }
+            self.widget
+                .execute_text_menu_action(self.tree, action, clipboard, shell);
             self.widget.set_context_menu_position(self.tree, None);
             // The menu closes and the selection may have changed.
             shell.request_redraw();
@@ -540,11 +616,7 @@ where
 #[cfg(wayland_platform)]
 pub(crate) fn create_text_context_popup(
     click_position: Point,
-    selected_text: Option<String>,
-    is_editable: bool,
-    has_selection: bool,
-    has_text: bool,
-    clipboard_has_text: bool,
+    context: TextMenuContext,
     menu_bar_state: &MenuBarState,
     pending_action: &PendingAction,
     renderer: &crate::Renderer,
@@ -558,7 +630,7 @@ pub(crate) fn create_text_context_popup(
         return;
     }
 
-    let mut menu_roots = build_menu_roots(is_editable, has_selection, has_text, clipboard_has_text);
+    let mut menu_roots = build_menu_roots(context);
     menu_roots.iter_mut().for_each(menu::Tree::set_index);
 
     let id = menu_bar_state.inner.with_data_mut(|state| {
@@ -667,7 +739,6 @@ pub(crate) fn create_text_context_popup(
         q.borrow_mut().push(PopupRequest {
             settings,
             menu: popup_menu,
-            selected_text,
             pending_action: pending_action.clone(),
             live_settings: LiveSettings {
                 corners: Some(CornerRadius {
@@ -721,7 +792,6 @@ pub(crate) fn dismiss_popup_on_event(
 #[derive(Clone)]
 struct TextContextMenuPopup<Message: Clone + 'static> {
     menu: Menu<'static, TextCtxAction>,
-    selected_text: Option<String>,
     pending_action: PendingAction,
     _phantom: std::marker::PhantomData<Message>,
 }
@@ -892,31 +962,12 @@ impl<Message: Clone + 'static> iced_core::widget::Widget<Message, crate::Theme, 
         }
 
         for action in local_messages {
-            match action {
-                TextCtxAction::Copy => {
-                    if let Some(ref text) = self.selected_text {
-                        clipboard.write(clipboard::Kind::Standard, text.clone());
-                    }
-                }
-                TextCtxAction::Cut => {
-                    if let Some(ref text) = self.selected_text {
-                        clipboard.write(clipboard::Kind::Standard, text.clone());
-                    }
-                    if let Ok(mut guard) = self.pending_action.lock() {
-                        *guard = Some(TextCtxAction::Cut);
-                    }
-                }
-                TextCtxAction::Paste => {
-                    if let Ok(mut guard) = self.pending_action.lock() {
-                        *guard = Some(TextCtxAction::Paste);
-                    }
-                }
-                TextCtxAction::SelectAll => {
-                    if let Ok(mut guard) = self.pending_action.lock() {
-                        *guard = Some(TextCtxAction::SelectAll);
-                    }
-                }
+            if let Ok(mut pending) = self.pending_action.lock() {
+                *pending = Some(action);
             }
+            // The source executes every choice, including Copy, against its
+            // current selection and permissions, before handling its next event.
+            shell.request_redraw();
         }
 
         // Under the popup grab the parent widget receives no events, so the
@@ -1008,11 +1059,13 @@ mod lifecycle_tests {
         let at = Point::new(20.0, 20.0);
         create_text_context_popup(
             at,
-            Some("Selected text".into()),
-            true,
-            true,
-            true,
-            true,
+            TextMenuContext {
+                kind: TextKind::Editable,
+                secure: false,
+                has_selection: true,
+                has_text: true,
+                clipboard_has_text: true,
+            },
             state,
             &PendingAction::default(),
             renderer,
@@ -1021,6 +1074,170 @@ mod lifecycle_tests {
             parent,
         );
         state.inner.with_data(|inner| inner.popup_id[&parent])
+    }
+
+    #[test]
+    fn native_popup_choices_run_once_on_source_redraw_with_live_permissions() {
+        use iced_core::widget::Widget;
+
+        #[derive(Default)]
+        struct RecordingClipboard(Vec<String>);
+        impl Clipboard for RecordingClipboard {
+            fn read(&self, _: iced_core::clipboard::Kind) -> Option<String> {
+                None
+            }
+            fn write(&mut self, _: iced_core::clipboard::Kind, text: String) {
+                self.0.push(text);
+            }
+        }
+
+        let renderer = renderer();
+        let viewport = Rectangle::with_size(Size::new(400.0, 300.0));
+        let limits = Limits::new(Size::ZERO, viewport.size());
+        for (choice, secure, read_only) in [
+            (TextAction::Copy, false, false),
+            (TextAction::Cut, false, false),
+            (TextAction::Copy, true, false),
+            (TextAction::Cut, false, true),
+        ] {
+            let parent = window::Id::unique();
+            let mut input = widget::text_input("", "opening").on_input(|text| text);
+            let mut source_tree =
+                Tree::new(&input as &dyn Widget<String, crate::Theme, crate::Renderer>);
+            input.diff(&mut source_tree);
+            let source_state = source_tree
+                .state
+                .downcast_mut::<widget::text_input::State>();
+            source_state.select_all();
+            let pending = source_state.pending_action.clone();
+            let menu_state = source_state.menu_bar_state.clone();
+            create_text_context_popup(
+                Point::new(20.0, 20.0),
+                input.text_menu_context(&source_tree),
+                &menu_state,
+                &pending,
+                &renderer,
+                &viewport,
+                mouse::Cursor::Available(Point::new(20.0, 20.0)),
+                parent,
+            );
+            let request = take_popup_requests(|id| id == parent).pop().unwrap();
+            let popup_id = request.settings.id;
+            let mut popup: TextContextMenuPopup<String> = TextContextMenuPopup {
+                menu: request.menu,
+                pending_action: request.pending_action,
+                _phantom: std::marker::PhantomData,
+            };
+            let mut popup_tree =
+                Tree::new(&popup as &dyn Widget<String, crate::Theme, crate::Renderer>);
+            let popup_node = popup.layout(&mut popup_tree, &renderer, &limits);
+            let popup_layout = Layout::new(&popup_node);
+            // Derive the row's hit target from the real menu layout.
+            let row = if choice == TextAction::Cut { 0 } else { 1 };
+            let at = popup_layout
+                .children()
+                .next()
+                .unwrap()
+                .children()
+                .nth(row)
+                .unwrap()
+                .bounds()
+                .center();
+            let mut clipboard = RecordingClipboard::default();
+            let mut popup_messages = Vec::new();
+            for event in [
+                mouse::Event::CursorMoved { position: at },
+                mouse::Event::ButtonPressed(mouse::Button::Left),
+                mouse::Event::ButtonReleased(mouse::Button::Left),
+            ] {
+                let released = matches!(event, mouse::Event::ButtonReleased(_));
+                let mut shell = Shell::new(&mut popup_messages);
+                popup.update(
+                    &mut popup_tree,
+                    &event::Event::Mouse(event),
+                    popup_layout,
+                    mouse::Cursor::Available(at),
+                    &renderer,
+                    &mut clipboard,
+                    &mut shell,
+                    &viewport,
+                );
+                if released {
+                    assert_eq!(
+                        shell.redraw_request(),
+                        window::RedrawRequest::NextFrame,
+                        "a committed native choice schedules execution without pointer movement"
+                    );
+                }
+            }
+            assert_eq!(
+                *pending.lock().unwrap(),
+                Some(choice),
+                "the real popup must place its chosen action in the source mailbox"
+            );
+            assert!(
+                clipboard.0.is_empty(),
+                "the popup cannot copy its opening snapshot"
+            );
+            assert!(popup_messages.is_empty());
+            assert!(
+                take_popup_destroys(|id| id == popup_id).contains(&popup_id),
+                "the native popup must queue teardown, which wakes the existing runtime"
+            );
+
+            // Change content and permissions after opening, before the scheduled redraw.
+            let source_state = source_tree
+                .state
+                .downcast_mut::<widget::text_input::State>();
+            source_state.tracked_value = widget::text_input::Value::new("current");
+            source_state.select_all();
+            if secure {
+                input = input.password();
+            }
+            if read_only {
+                input = input.editing(false);
+            }
+            let mut source_messages = Vec::new();
+            for _ in 0..2 {
+                let source_node = input.layout(&mut source_tree, &renderer, &limits);
+                input.update(
+                    &mut source_tree,
+                    &event::Event::Window(window::Event::RedrawRequested(
+                        iced_core::time::Instant::now(),
+                    )),
+                    Layout::new(&source_node),
+                    mouse::Cursor::Unavailable,
+                    &renderer,
+                    &mut clipboard,
+                    &mut Shell::new(&mut source_messages),
+                    &viewport,
+                );
+            }
+            assert_eq!(
+                *pending.lock().unwrap(),
+                None,
+                "the source takes a choice only once"
+            );
+            let permitted = !secure && !read_only;
+            assert_eq!(
+                clipboard.0,
+                if permitted {
+                    vec!["current".to_owned()]
+                } else {
+                    vec![]
+                },
+                "source execution uses live selection and permissions exactly once"
+            );
+            assert_eq!(
+                source_messages,
+                if permitted && choice == TextAction::Cut {
+                    vec![String::new()]
+                } else {
+                    vec![]
+                },
+                "a native Cut publishes one edit callback, and Copy publishes none"
+            );
+        }
     }
 
     #[test]
@@ -1107,7 +1324,6 @@ mod lifecycle_tests {
         let first = take_popup_requests(|id| id == parent).pop().unwrap();
         let mut popup: TextContextMenuPopup<()> = TextContextMenuPopup {
             menu: first.menu,
-            selected_text: first.selected_text,
             pending_action: first.pending_action,
             _phantom: std::marker::PhantomData,
         };

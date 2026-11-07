@@ -377,6 +377,26 @@ where
         self
     }
 
+    /// Dispatches a native action immediately through `on_action`.
+    ///
+    /// Without an edit callback, selection and navigation act on the native
+    /// editor directly. Content edits are ignored. Context-menu adapters use
+    /// this instead of scheduling an edit that needs another input event.
+    pub fn dispatch_action(
+        &self,
+        action: Action,
+        shell: &mut Shell<'_, Message>,
+    ) {
+        if let Some(on_edit) = self.on_edit.as_ref() {
+            shell.publish(on_edit(action));
+        } else if !action.is_edit() {
+            self.content.0.borrow_mut().editor.perform(action);
+        } else {
+            return;
+        }
+        shell.request_redraw();
+    }
+
     fn input_method<'b>(
         &self,
         state: &'b State<Highlighter>,
@@ -741,6 +761,15 @@ where
         shell: &mut Shell<'_, Message>,
         _viewport: &Rectangle,
     ) {
+        // Process pending edits from context menu
+        // publishes via on_edit so the app calls content.perform().
+        {
+            let state = tree.state.downcast_mut::<State<Highlighter>>();
+            if let Some(action) = state.pending_edit.take() {
+                self.dispatch_action(action, shell);
+            }
+        }
+
         // Handle context menu and focus-loss on clicks outside.
         {
             let state = tree.state.downcast_mut::<State<Highlighter>>();
@@ -781,17 +810,6 @@ where
                     }
                 }
                 _ => {}
-            }
-        }
-
-        // Process pending edits from context menu
-        // publishes via on_edit so the app calls content.perform().
-        {
-            let state = tree.state.downcast_mut::<State<Highlighter>>();
-            if let Some(action) = state.pending_edit.take() {
-                if let Some(on_edit) = self.on_edit.as_ref() {
-                    shell.publish((on_edit)(action));
-                }
             }
         }
 
@@ -1697,8 +1715,16 @@ where
     }
 
     fn select_all(&self, tree: &mut widget::Tree) {
-        let state = tree.state.downcast_mut::<State<Highlighter>>();
-        state.pending_edit = Some(Action::SelectAll);
+        if self.on_edit.is_some() {
+            let state = tree.state.downcast_mut::<State<Highlighter>>();
+            state.pending_edit = Some(Action::SelectAll);
+        } else {
+            self.content
+                .0
+                .borrow_mut()
+                .editor
+                .perform(Action::SelectAll);
+        }
     }
 
     fn is_editable(&self) -> bool {
@@ -1736,6 +1762,9 @@ where
     }
 
     fn delete_selection(&self, tree: &mut widget::Tree) -> Option<String> {
+        if self.on_edit.is_none() {
+            return None;
+        }
         let state = tree.state.downcast_mut::<State<Highlighter>>();
         state.pending_edit = Some(Action::Edit(Edit::Delete));
         Some(String::new())
@@ -1746,6 +1775,9 @@ where
         tree: &mut widget::Tree,
         text: &str,
     ) -> Option<String> {
+        if self.on_edit.is_none() {
+            return None;
+        }
         let state = tree.state.downcast_mut::<State<Highlighter>>();
         state.pending_edit =
             Some(Action::Edit(Edit::Paste(Arc::new(text.to_owned()))));

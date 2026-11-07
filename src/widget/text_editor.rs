@@ -9,6 +9,8 @@ pub use iced_widget::text_editor::{
 };
 
 use crate::widget::menu::MenuBarState;
+use crate::widget::text_context_menu::{TextAction, TextKind, TextMenuContext, TextMenuTarget};
+use iced_core::widget::text::HasSelectableText;
 
 use iced_core::event::Event;
 use iced_core::text::highlighter;
@@ -24,6 +26,7 @@ type InnerEditor<'a, Message> =
 pub struct TextEditor<'a, Message> {
     inner: InnerEditor<'a, Message>,
     has_context_menu: bool,
+    external_text_menu: bool,
     window_id: window::Id,
 }
 
@@ -39,6 +42,7 @@ impl<'a, Message: Clone + 'static> TextEditor<'a, Message> {
             inner: iced_widget::text_editor(content)
                 .selected_text_color(|theme: &crate::Theme, _| theme.cosmic().accent.on.into()),
             has_context_menu: true,
+            external_text_menu: false,
             window_id: crate::widget::text_context_menu::current_window_id(),
         }
     }
@@ -275,6 +279,14 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, crate::Renderer
         viewport: &Rectangle,
     ) {
         if self.has_context_menu {
+            let pending = tree
+                .state
+                .downcast_ref::<EditorWrapperState>()
+                .pending_action
+                .clone();
+            if let Some(action) = crate::widget::text_context_menu::take_pending_action(&pending) {
+                self.execute_text_menu_action(tree, action, clipboard, shell);
+            }
             ew_mut::<Message>(&mut self.inner).update(
                 &mut tree.children[0],
                 event,
@@ -299,14 +311,13 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, crate::Renderer
             }
 
             #[cfg(wayland_platform)]
-            if self.uses_popup_context_menu() {
+            if !self.external_text_menu && self.uses_popup_context_menu() {
                 if self
                     .inner
                     .context_menu_position(&tree.children[0])
                     .is_some()
                 {
-                    let selected_text = self.inner.selected_text(&tree.children[0]);
-                    let has_selection = selected_text.is_some();
+                    let context = self.text_menu_context(tree);
                     let click_position =
                         self.inner.context_menu_position(&tree.children[0]).unwrap();
                     let wrapper_state = tree.state.downcast_ref::<EditorWrapperState>();
@@ -315,11 +326,7 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, crate::Renderer
 
                     crate::widget::text_context_menu::create_text_context_popup(
                         click_position,
-                        selected_text,
-                        self.inner.is_editable(),
-                        has_selection,
-                        self.inner.has_text(&tree.children[0]),
-                        self.inner.clipboard_has_text(&tree.children[0]),
+                        context,
                         &menu_bar_state,
                         &pending_action,
                         renderer,
@@ -330,31 +337,6 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, crate::Renderer
 
                     self.inner
                         .set_context_menu_position(&mut tree.children[0], None);
-                }
-
-                // Process deferred actions from the popup.
-                {
-                    let wrapper_state = tree.state.downcast_ref::<EditorWrapperState>();
-                    let pending_action = wrapper_state.pending_action.clone();
-                    if let Some(action) =
-                        crate::widget::text_context_menu::take_pending_action(&pending_action)
-                    {
-                        match action {
-                            crate::widget::text_context_menu::TextCtxAction::Copy => {}
-                            crate::widget::text_context_menu::TextCtxAction::Cut => {
-                                self.inner.delete_selection(&mut tree.children[0]);
-                            }
-                            crate::widget::text_context_menu::TextCtxAction::Paste => {
-                                let content: String = clipboard
-                                    .read(iced_core::clipboard::Kind::Standard)
-                                    .unwrap_or_default();
-                                self.inner.paste_text(&mut tree.children[0], &content);
-                            }
-                            crate::widget::text_context_menu::TextCtxAction::SelectAll => {
-                                self.inner.select_all(&mut tree.children[0]);
-                            }
-                        }
-                    }
                 }
 
                 // Dismiss popup on outside click / Escape.
@@ -398,7 +380,7 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, crate::Renderer
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, crate::Theme, crate::Renderer>> {
         if self.has_context_menu {
-            if !self.uses_popup_context_menu() {
+            if !self.external_text_menu && !self.uses_popup_context_menu() {
                 use iced_core::widget::text::HasSelectableText;
                 let inner_tree = &mut tree.children[0];
                 if self.inner.context_menu_position(inner_tree).is_some() {
@@ -409,9 +391,8 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, crate::Renderer
                         .clone();
                     let inner_tree = &mut tree.children[0];
                     return crate::widget::text_context_menu::context_menu_overlay(
-                        &self.inner,
+                        &mut self.inner,
                         inner_tree,
-                        None,
                         translation,
                         menu_bar_state,
                     );
@@ -486,5 +467,104 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, crate::Renderer
 impl<'a, Message: Clone + 'static> From<TextEditor<'a, Message>> for crate::Element<'a, Message> {
     fn from(editor: TextEditor<'a, Message>) -> Self {
         Self::new(editor)
+    }
+}
+
+impl<Message> TextMenuTarget<Message> for InnerEditor<'_, Message> {
+    fn use_external_text_menu(&mut self) {}
+
+    fn take_text_menu_request(&self, tree: &mut Tree) -> Option<iced_core::Point> {
+        let position = self.context_menu_position(tree);
+        self.set_context_menu_position(tree, None);
+        position
+    }
+
+    fn text_menu_context(&self, tree: &Tree) -> TextMenuContext {
+        TextMenuContext {
+            kind: if self.is_editable() {
+                TextKind::Editable
+            } else {
+                TextKind::ReadOnlyInput
+            },
+            secure: false,
+            has_selection: self.selected_text(tree).is_some(),
+            has_text: self.has_text(tree),
+            clipboard_has_text: self.clipboard_has_text(tree),
+        }
+    }
+
+    fn execute_text_menu_action(
+        &mut self,
+        tree: &mut Tree,
+        action: TextAction,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+    ) {
+        let context = self.text_menu_context(tree);
+        if action == TextAction::Paste {
+            if context.kind != TextKind::Editable {
+                return;
+            }
+        } else if !context.allows(action) {
+            return;
+        }
+        match action {
+            TextAction::Copy => self.copy_to_clipboard(tree, clipboard),
+            TextAction::Cut => {
+                self.copy_to_clipboard(tree, clipboard);
+                self.dispatch_action(Action::Edit(Edit::Delete), shell);
+            }
+            TextAction::Paste => {
+                let Some(text) = clipboard
+                    .read(iced_core::clipboard::Kind::Standard)
+                    .filter(|text| !text.is_empty())
+                else {
+                    return;
+                };
+                self.dispatch_action(Action::Edit(Edit::Paste(std::sync::Arc::new(text))), shell);
+            }
+            TextAction::SelectAll => self.dispatch_action(Action::SelectAll, shell),
+        }
+        shell.request_redraw();
+    }
+}
+
+impl<Message: Clone + 'static> TextMenuTarget<Message> for TextEditor<'_, Message> {
+    fn use_external_text_menu(&mut self) {
+        self.external_text_menu = true;
+    }
+
+    fn take_text_menu_request(&self, tree: &mut Tree) -> Option<iced_core::Point> {
+        let inner_tree = if self.has_context_menu {
+            &mut tree.children[0]
+        } else {
+            tree
+        };
+        self.inner.take_text_menu_request(inner_tree)
+    }
+
+    fn text_menu_context(&self, tree: &Tree) -> TextMenuContext {
+        let inner_tree = if self.has_context_menu {
+            &tree.children[0]
+        } else {
+            tree
+        };
+        self.inner.text_menu_context(inner_tree)
+    }
+
+    fn execute_text_menu_action(
+        &mut self,
+        tree: &mut Tree,
+        action: TextAction,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+    ) {
+        let inner_tree = if self.has_context_menu {
+            &mut tree.children[0]
+        } else {
+            tree
+        };
+        self.inner
+            .execute_text_menu_action(inner_tree, action, clipboard, shell);
     }
 }

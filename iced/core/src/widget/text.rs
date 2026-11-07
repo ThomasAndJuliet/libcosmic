@@ -168,6 +168,16 @@ where
         self
     }
 
+    /// Returns whether native selection is enabled.
+    pub fn is_selectable(&self) -> bool {
+        self.selectable
+    }
+
+    /// Enables or disables native text selection.
+    pub fn set_selectable(&mut self, selectable: bool) {
+        self.selectable = selectable;
+    }
+
     /// Sets the style of the [`Text`].
     #[must_use]
     pub fn style(mut self, style: impl Fn(&Theme) -> Style + 'a) -> Self
