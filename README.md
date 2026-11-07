@@ -1,5 +1,31 @@
 # LIBCOSMIC
 
+## Household validation
+
+The complete required fork suite is implemented in
+`.github/workflows/household.yml`; its workspace lockfiles are described in
+[HOUSEHOLD.md](HOUSEHOLD.md). Run the CI commands locally as follows (weston must be installed):
+
+```sh
+APP_FEATURES=about,autosize,multi-window,tokio,winit,surface-message,wayland,wgpu,dbus-config
+cargo test --locked --lib
+cargo check --locked --lib --no-default-features --features "$APP_FEATURES"
+cargo test --locked --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib lifecycle_tests -- --test-threads=1
+cargo test --locked --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib popup_state_tests -- --test-threads=1
+cargo test --locked --no-default-features --features winit,wayland,tokio,multi-window --test exit_teardown
+cargo test --locked -p cosmic-theme
+(cd iced && cargo test --locked -p iced_core --lib)
+(cd iced && cargo test --locked -p iced_widget --lib)
+(cd iced && cargo test --locked -p iced_wgpu --lib failure_tests)
+(cd iced && cargo test --locked -p iced_tiny_skia --lib failure_tests)
+(cd iced && cargo test --locked -p iced_tiny_skia --features svg --lib)
+(cd winit && cargo check -p winit-wayland)
+```
+
+This toolkit has no standalone Flatpak package; consuming applications validate
+their finished Flatpak builds when adopting a new fork revision.
+
+
 A platform toolkit based on iced for creating applets and applications for the COSMIC™ desktop.
 
 ## Documentation
@@ -122,9 +148,9 @@ leaving the application responsible for `Content::perform`.
 Focused regressions reuse the headless tiny-skia selection fixtures:
 
 ```sh
-cargo test --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib selection_tests -- --test-threads=1
-cargo test --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib lifecycle_tests -- --test-threads=1
-cargo test --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib popup_state_tests -- --test-threads=1
+cargo test --locked --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib selection_tests -- --test-threads=1
+cargo test --locked --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib lifecycle_tests -- --test-threads=1
+cargo test --locked --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib popup_state_tests -- --test-threads=1
 ```
 
 The complete required fork suite is documented in [HOUSEHOLD.md](HOUSEHOLD.md)
