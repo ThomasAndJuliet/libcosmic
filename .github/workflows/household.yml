@@ -38,18 +38,37 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Record test environment
+        run: |
+          rustc --version
+          fc-match sans
+          fc-list --format '%{family}\n' | sort -u
+          locale
+
       - name: libcosmic
-        run: cargo test --lib
+        id: lib_tests
+        run: cargo test --locked --lib
+
+      - name: Diagnose individual rendering tests
+        if: ${{ failure() && steps.lib_tests.outcome == 'failure' }}
+        run: |
+          set +e
+          cargo test --locked --lib widget::segmented_button::look_tests::the_chosen_part_keeps_its_text_colour_when_hovered_or_pressed -- --exact --nocapture --test-threads=1
+          chosen_status=$?
+          cargo test --locked --lib widget::segmented_button::horizontal::tests::an_items_own_title_colour_is_drawn_on_its_title_alone -- --exact --nocapture --test-threads=1
+          title_status=$?
+          printf 'Individual test statuses: chosen=%s title=%s\n' "$chosen_status" "$title_status"
+          if [ "$chosen_status" -ne 0 ] || [ "$title_status" -ne 0 ]; then exit 1; fi
 
       - name: libcosmic with the apps' features
-        run: cargo check --lib --no-default-features --features "$APP_FEATURES"
+        run: cargo check --locked --lib --no-default-features --features "$APP_FEATURES"
 
       # Moved here from cosmic-term's CI with the fork (they ran against its
       # vendored copy)
       - name: Native popup lifecycle and menu model changes
         run: |
-          cargo test --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib lifecycle_tests -- --test-threads=1
-          cargo test --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib popup_state_tests -- --test-threads=1
+          cargo test --locked --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib lifecycle_tests -- --test-threads=1
+          cargo test --locked --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib popup_state_tests -- --test-threads=1
 
       # Quitting must not segfault or leave the SCTK thread behind. The test
       # starts its own headless weston (hence the package above) and runs
@@ -57,10 +76,10 @@ jobs:
       # and with its own weston killed under it (the compositor goes away).
       # It fails, and does not skip, if weston is missing.
       - name: Quitting an application, under a headless weston
-        run: cargo test --no-default-features --features winit,wayland,tokio,multi-window --test exit_teardown
+        run: cargo test --locked --no-default-features --features winit,wayland,tokio,multi-window --test exit_teardown
 
       - name: cosmic-theme
-        run: cargo test -p cosmic-theme
+        run: cargo test --locked -p cosmic-theme
 
       - name: iced widget state reconciliation
         working-directory: iced

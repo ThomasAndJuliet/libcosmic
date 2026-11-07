@@ -224,6 +224,17 @@ Juliet, 25 Oct: "the fork carries small bug fixes". Each commit has an `Origin:`
 
 Push a `fork/<topic>` branch to get a run before merging it into `household`.
 
+The root `Cargo.lock` records the dependency resolution used by these tests.
+Keep it in Git and use `--locked` for root-workspace commands: unpinned git
+dependencies can change their package names or APIs independently of this
+fork. This lockfile affects builds from this workspace only. Applications
+depending on the fork continue to resolve through their own root lockfile;
+their manifest patches and fork revision pins are unchanged.
+
+The excluded `iced/` workspace has its own tracked `Cargo.lock` and already
+uses `--locked`. The excluded `winit/` workspace has no tracked lockfile;
+its standalone Wayland check continues to resolve dependencies independently.
+
 ## Rebasing onto upstream
 
 1. Fetch upstream libcosmic, and rebase `household` onto the new upstream commit, dropping the subtree commits.
