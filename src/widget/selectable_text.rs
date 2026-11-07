@@ -1,5 +1,4 @@
 use crate::Renderer;
-use crate::widget::menu::MenuBarState;
 use crate::widget::text_context_menu::{TextAction, TextMenuContext, TextMenuTarget};
 
 use iced::window;
@@ -73,17 +72,6 @@ impl<'a> SelectableText<'a> {
     /// non-selectable text would have nothing to act on).
     fn shows_context_menu(&self) -> bool {
         self.selectable && self.context_menu
-    }
-
-    fn uses_popup_context_menu(&self) -> bool {
-        #[cfg(all(wayland_platform, feature = "winit"))]
-        if matches!(
-            crate::app::cosmic::WINDOWING_SYSTEM.get(),
-            Some(crate::app::cosmic::WindowingSystem::Wayland)
-        ) {
-            return true;
-        }
-        false
     }
 
     pub fn size(mut self, size: impl Into<Pixels>) -> Self {
@@ -203,8 +191,7 @@ impl<'a> From<&'a str> for SelectableText<'a> {
 }
 
 struct TextWrapperState {
-    menu_bar_state: MenuBarState,
-    pending_action: crate::widget::text_context_menu::PendingAction,
+    text_menu_session: crate::widget::text_context_menu::TextMenuSession,
 }
 
 fn w<'x, Message>(inner: &'x InnerText<'_>) -> &'x dyn Widget<Message, crate::Theme, Renderer> {
@@ -229,8 +216,7 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, Renderer> for S
     fn state(&self) -> tree::State {
         if self.shows_context_menu() {
             tree::State::new(TextWrapperState {
-                menu_bar_state: MenuBarState::default(),
-                pending_action: crate::widget::text_context_menu::pending_action(),
+                text_menu_session: Default::default(),
             })
         } else {
             w::<Message>(&self.inner).state()
@@ -327,16 +313,20 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, Renderer> for S
         viewport: &Rectangle,
     ) {
         if self.shows_context_menu() {
-            let pending = tree
-                .state
-                .downcast_ref::<TextWrapperState>()
-                .pending_action
-                .clone();
-            if let Some(action) = crate::widget::text_context_menu::take_pending_action(&pending) {
+            if let Some(action) = crate::widget::text_context_menu::take_stock_action(
+                &mut tree
+                    .state
+                    .downcast_mut::<TextWrapperState>()
+                    .text_menu_session,
+            ) {
                 <Self as TextMenuTarget<Message>>::execute_text_menu_action(
                     self, tree, action, clipboard, shell,
                 );
             }
+            tree.state
+                .downcast_mut::<TextWrapperState>()
+                .text_menu_session
+                .dismiss_on_event(event);
             w_mut::<Message>(&mut self.inner).update(
                 &mut tree.children[0],
                 event,
@@ -348,44 +338,17 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, Renderer> for S
                 viewport,
             );
 
-            #[cfg(wayland_platform)]
-            if !self.external_text_menu && self.uses_popup_context_menu() {
-                use iced_core::widget::text::HasSelectableText;
-
-                if self
-                    .inner
-                    .context_menu_position(&tree.children[0])
-                    .is_some()
+            if !self.external_text_menu {
+                if let Some(at) =
+                    <Self as TextMenuTarget<Message>>::take_text_menu_request(self, tree)
                 {
                     let context = <Self as TextMenuTarget<Message>>::text_menu_context(self, tree);
-                    let click_position =
-                        self.inner.context_menu_position(&tree.children[0]).unwrap();
-                    let wrapper_state = tree.state.downcast_ref::<TextWrapperState>();
-                    let menu_bar_state = wrapper_state.menu_bar_state.clone();
-                    let pending_action = wrapper_state.pending_action.clone();
-
-                    crate::widget::text_context_menu::create_text_context_popup(
-                        click_position,
-                        context,
-                        &menu_bar_state,
-                        &pending_action,
-                        renderer,
-                        viewport,
-                        cursor,
-                        self.window_id,
-                    );
-
-                    self.inner
-                        .set_context_menu_position(&mut tree.children[0], None);
+                    let view = crate::widget::text_context_menu::stock_view(context);
+                    tree.state
+                        .downcast_mut::<TextWrapperState>()
+                        .text_menu_session
+                        .open(view, at, renderer, viewport, cursor, self.window_id);
                 }
-
-                let wrapper_state = tree.state.downcast_ref::<TextWrapperState>();
-                let menu_bar_state = wrapper_state.menu_bar_state.clone();
-                crate::widget::text_context_menu::dismiss_popup_on_event(
-                    &menu_bar_state,
-                    event,
-                    self.window_id,
-                );
             }
         } else {
             w_mut::<Message>(&mut self.inner).update(
@@ -418,20 +381,11 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, Renderer> for S
         _viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, crate::Theme, Renderer>> {
-        if self.shows_context_menu() && !self.external_text_menu && !self.uses_popup_context_menu()
-        {
-            let menu_bar_state = tree
-                .state
-                .downcast_ref::<TextWrapperState>()
-                .menu_bar_state
-                .clone();
-            let inner_tree = &mut tree.children[0];
-            crate::widget::text_context_menu::context_menu_overlay(
-                &mut self.inner,
-                inner_tree,
-                translation,
-                menu_bar_state,
-            )
+        if self.shows_context_menu() && !self.external_text_menu {
+            tree.state
+                .downcast_mut::<TextWrapperState>()
+                .text_menu_session
+                .overlay(translation)
         } else {
             None
         }
