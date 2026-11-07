@@ -219,6 +219,7 @@ pub struct TextInput<'a, Message> {
     manage_value: bool,
     drag_threshold: f32,
     window_id: window::Id,
+    external_text_menu: bool,
 }
 
 impl<'a, Message> TextInput<'a, Message>
@@ -270,6 +271,7 @@ where
             manage_value: false,
             drag_threshold: 20.0,
             window_id: crate::widget::text_context_menu::current_window_id(),
+            external_text_menu: false,
         }
     }
 
@@ -862,7 +864,7 @@ where
         viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, crate::Theme, crate::Renderer>> {
-        if !self.uses_popup_context_menu() {
+        if !self.external_text_menu && !self.uses_popup_context_menu() {
             let has_context_menu = tree
                 .state
                 .downcast_ref::<State>()
@@ -873,7 +875,6 @@ where
                 return crate::widget::text_context_menu::context_menu_overlay(
                     self,
                     tree,
-                    self.on_input.as_deref(),
                     translation,
                     menu_bar_state,
                 );
@@ -921,6 +922,12 @@ where
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
+        let pending = tree.state.downcast_ref::<State>().pending_action.clone();
+        if let Some(action) = crate::widget::text_context_menu::take_pending_action(&pending) {
+            use crate::widget::text_context_menu::TextMenuTarget;
+            self.execute_text_menu_action(tree, action, clipboard, shell);
+        }
+
         #[cfg(all(wayland_platform, feature = "winit"))]
         if self.uses_popup_context_menu() {
             let menu_bar_state = tree.state.downcast_ref::<State>().menu_bar_state.clone();
@@ -1047,67 +1054,24 @@ where
             crate::app::cosmic::WINDOWING_SYSTEM.get(),
             Some(crate::app::cosmic::WindowingSystem::Wayland)
         ) {
-            let state = tree.state.downcast_ref::<State>();
-            if state.context_menu_position.is_some() {
-                let selected_text = state
-                    .cursor()
-                    .selection(&state.tracked_value)
-                    .map(|(start, end)| state.tracked_value.select(start, end).to_string());
-                let has_selection = selected_text.is_some();
-                let has_text = !state.tracked_value.is_empty();
-                let clipboard_has_text = state.clipboard_has_text;
-                let click_position = state.context_menu_position.unwrap();
-                let menu_bar_state = state.menu_bar_state.clone();
-                let pending_action = state.pending_action.clone();
-
-                crate::widget::text_context_menu::create_text_context_popup(
-                    click_position,
-                    selected_text,
-                    true,
-                    has_selection,
-                    has_text,
-                    clipboard_has_text,
-                    &menu_bar_state,
-                    &pending_action,
-                    renderer,
-                    viewport,
-                    cursor_position,
-                    self.window_id,
-                );
-
-                let state = tree.state.downcast_mut::<State>();
-                state.context_menu_position = None;
-            }
-
-            // Process deferred actions from the popup.
-            let state = tree.state.downcast_ref::<State>();
-            let pending_action = state.pending_action.clone();
-            if let Some(action) =
-                crate::widget::text_context_menu::take_pending_action(&pending_action)
-            {
-                let state = tree.state.downcast_mut::<State>();
-                match action {
-                    crate::widget::text_context_menu::TextCtxAction::Copy => {}
-                    crate::widget::text_context_menu::TextCtxAction::Cut => {
-                        let contents = state.delete_selection();
-                        if let Some(on_input) = self.on_input.as_deref() {
-                            shell.publish((on_input)(contents));
-                        }
-                    }
-                    crate::widget::text_context_menu::TextCtxAction::Paste => {
-                        let content: String = clipboard
-                            .read(iced_core::clipboard::Kind::Standard)
-                            .unwrap_or_default();
-                        let filtered: String =
-                            content.chars().filter(|c| !c.is_control()).collect();
-                        let contents = state.paste_text(&filtered);
-                        if let Some(on_input) = self.on_input.as_deref() {
-                            shell.publish((on_input)(contents));
-                        }
-                    }
-                    crate::widget::text_context_menu::TextCtxAction::SelectAll => {
-                        state.select_all();
-                    }
+            if !self.external_text_menu {
+                let state = tree.state.downcast_ref::<State>();
+                if let Some(click_position) = state.context_menu_position {
+                    use crate::widget::text_context_menu::TextMenuTarget;
+                    let context = self.text_menu_context(tree);
+                    let menu_bar_state = state.menu_bar_state.clone();
+                    let pending_action = state.pending_action.clone();
+                    crate::widget::text_context_menu::create_text_context_popup(
+                        click_position,
+                        context,
+                        &menu_bar_state,
+                        &pending_action,
+                        renderer,
+                        viewport,
+                        cursor_position,
+                        self.window_id,
+                    );
+                    tree.state.downcast_mut::<State>().context_menu_position = None;
                 }
             }
         }
@@ -3561,6 +3525,9 @@ impl<Message: Clone + 'static> iced_core::widget::text::HasSelectableText
 {
     fn selected_text(&self, tree: &WidgetTree) -> Option<String> {
         let state = tree.state.downcast_ref::<State>();
+        if self.is_secure || state.is_secure {
+            return None;
+        }
         let (start, end) = state.cursor().selection(&state.tracked_value)?;
         Some(state.tracked_value.select(start, end).to_string())
     }
@@ -3571,7 +3538,7 @@ impl<Message: Clone + 'static> iced_core::widget::text::HasSelectableText
     }
 
     fn is_editable(&self) -> bool {
-        true
+        !self.is_read_only && (self.on_input.is_some() || self.manage_value)
     }
 
     fn has_text(&self, tree: &WidgetTree) -> bool {
@@ -3595,13 +3562,121 @@ impl<Message: Clone + 'static> iced_core::widget::text::HasSelectableText
     }
 
     fn delete_selection(&self, tree: &mut WidgetTree) -> Option<String> {
+        use crate::widget::text_context_menu::{TextAction, TextMenuTarget};
+        if !self.text_menu_context(tree).allows(TextAction::Cut) {
+            return None;
+        }
         let state = tree.state.downcast_mut::<State>();
+        state.dirty = true;
         Some(state.delete_selection())
     }
 
     fn paste_text(&self, tree: &mut WidgetTree, text: &str) -> Option<String> {
+        use crate::widget::text_context_menu::{TextKind, TextMenuTarget};
+        if self.text_menu_context(tree).kind != TextKind::Editable {
+            return None;
+        }
         let filtered: String = text.chars().filter(|c| !c.is_control()).collect();
         let state = tree.state.downcast_mut::<State>();
+        state.dirty = true;
         Some(state.paste_text(&filtered))
+    }
+}
+
+impl<Message: Clone + 'static> crate::widget::text_context_menu::TextMenuTarget<Message>
+    for TextInput<'_, Message>
+{
+    fn use_external_text_menu(&mut self) {
+        self.external_text_menu = true;
+    }
+
+    fn take_text_menu_request(&self, tree: &mut Tree) -> Option<Point> {
+        tree.state
+            .downcast_mut::<State>()
+            .context_menu_position
+            .take()
+    }
+
+    fn text_menu_context(&self, tree: &Tree) -> crate::widget::text_context_menu::TextMenuContext {
+        use crate::widget::text_context_menu::{TextKind, TextMenuContext};
+        let state = tree.state.downcast_ref::<State>();
+        let editable = !self.is_read_only
+            && !state.is_read_only
+            && (self.on_input.is_some() || self.manage_value);
+        TextMenuContext {
+            kind: if editable {
+                TextKind::Editable
+            } else {
+                TextKind::ReadOnlyInput
+            },
+            secure: self.is_secure || state.is_secure,
+            has_selection: state.cursor.selection(&state.tracked_value).is_some(),
+            has_text: !state.tracked_value.is_empty(),
+            clipboard_has_text: state.clipboard_has_text,
+        }
+    }
+
+    fn execute_text_menu_action(
+        &mut self,
+        tree: &mut Tree,
+        action: crate::widget::text_context_menu::TextAction,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+    ) {
+        use crate::widget::text_context_menu::{TextAction, TextKind};
+        let context = self.text_menu_context(tree);
+        // Paste reads the live clipboard, rather than trusting its opening snapshot.
+        if action == TextAction::Paste {
+            if context.kind != TextKind::Editable {
+                return;
+            }
+        } else if !context.allows(action) {
+            return;
+        }
+        let state = tree.state.downcast_mut::<State>();
+        match action {
+            TextAction::Copy => {
+                if let Some((start, end)) = state.cursor.selection(&state.tracked_value) {
+                    clipboard.write(
+                        iced_core::clipboard::Kind::Standard,
+                        state.tracked_value.select(start, end).to_string(),
+                    );
+                }
+            }
+            TextAction::Cut => {
+                if let Some((start, end)) = state.cursor.selection(&state.tracked_value) {
+                    clipboard.write(
+                        iced_core::clipboard::Kind::Standard,
+                        state.tracked_value.select(start, end).to_string(),
+                    );
+                    let contents = state.delete_selection();
+                    self.value = state.tracked_value.clone();
+                    state.dirty = true;
+                    if let Some(on_input) = self.on_input.as_deref() {
+                        shell.publish(on_input(contents));
+                    }
+                }
+            }
+            TextAction::Paste => {
+                let Some(contents) = clipboard
+                    .read(iced_core::clipboard::Kind::Standard)
+                    .filter(|text| !text.is_empty())
+                else {
+                    return;
+                };
+                let filtered: String = contents.chars().filter(|c| !c.is_control()).collect();
+                let contents = state.paste_text(&filtered);
+                self.value = state.tracked_value.clone();
+                state.dirty = true;
+                if let Some(callback) = self.on_paste.as_deref().or(self.on_input.as_deref()) {
+                    shell.publish(callback(contents));
+                }
+            }
+            TextAction::SelectAll => state.select_all(),
+        }
+        shell.request_redraw();
+        if state.dirty {
+            shell.invalidate_layout();
+        }
     }
 }

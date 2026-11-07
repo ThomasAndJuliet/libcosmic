@@ -108,3 +108,26 @@ Licensed under the [Mozilla Public License 2.0](https://choosealicense.com/licen
 - [Reddit](https://www.reddit.com/r/pop_os/)
 - [Twitter](https://twitter.com/pop_os_official)
 - [Instagram](https://www.instagram.com/pop_os_official)
+
+
+## Household native text menus
+
+The fork's native input, editor, selectable text and plain selectable `Text`
+implement `widget::text_context_menu::TextMenuTarget`. A wrapper can take native
+menu requests and execute typed actions while supplying its own presentation.
+Stock menus use the same executor. Input paste preserves native control-character
+filtering and `on_paste` precedence; editor edits emit `on_action` immediately,
+leaving the application responsible for `Content::perform`.
+
+Focused regressions reuse the headless tiny-skia selection fixtures:
+
+```sh
+cargo test --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib selection_tests -- --test-threads=1
+cargo test --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib lifecycle_tests -- --test-threads=1
+cargo test --no-default-features --features about,autosize,multi-window,tokio,winit,surface-message,wgpu,wayland --lib popup_state_tests -- --test-threads=1
+```
+
+The complete required fork suite is documented in [HOUSEHOLD.md](HOUSEHOLD.md)
+and implemented in `.github/workflows/household.yml`. This toolkit has no
+standalone Flatpak package; consuming applications validate their finished
+Flatpak builds when adopting a new fork revision.
