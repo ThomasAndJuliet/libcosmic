@@ -587,17 +587,6 @@ where
         self.drag_threshold = drag_threshold;
         self
     }
-
-    fn uses_popup_context_menu(&self) -> bool {
-        #[cfg(all(wayland_platform, feature = "winit"))]
-        if matches!(
-            crate::app::cosmic::WINDOWING_SYSTEM.get(),
-            Some(crate::app::cosmic::WindowingSystem::Wayland)
-        ) {
-            return true;
-        }
-        false
-    }
 }
 
 impl<Message> Widget<Message, crate::Theme, crate::Renderer> for TextInput<'_, Message>
@@ -864,20 +853,10 @@ where
         viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, crate::Theme, crate::Renderer>> {
-        if !self.external_text_menu && !self.uses_popup_context_menu() {
-            let has_context_menu = tree
-                .state
-                .downcast_ref::<State>()
-                .context_menu_position
-                .is_some();
-            if has_context_menu {
-                let menu_bar_state = tree.state.downcast_ref::<State>().menu_bar_state.clone();
-                return crate::widget::text_context_menu::context_menu_overlay(
-                    self,
-                    tree,
-                    translation,
-                    menu_bar_state,
-                );
+        if !self.external_text_menu {
+            let session = &mut tree.state.downcast_mut::<State>().text_menu_session;
+            if session.is_open() {
+                return session.overlay(translation);
             }
         }
 
@@ -922,21 +901,16 @@ where
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
-        let pending = tree.state.downcast_ref::<State>().pending_action.clone();
-        if let Some(action) = crate::widget::text_context_menu::take_pending_action(&pending) {
+        if let Some(action) = crate::widget::text_context_menu::take_stock_action(
+            &mut tree.state.downcast_mut::<State>().text_menu_session,
+        ) {
             use crate::widget::text_context_menu::TextMenuTarget;
             self.execute_text_menu_action(tree, action, clipboard, shell);
         }
-
-        #[cfg(all(wayland_platform, feature = "winit"))]
-        if self.uses_popup_context_menu() {
-            let menu_bar_state = tree.state.downcast_ref::<State>().menu_bar_state.clone();
-            crate::widget::text_context_menu::dismiss_popup_on_event(
-                &menu_bar_state,
-                event,
-                self.window_id,
-            );
-        }
+        tree.state
+            .downcast_mut::<State>()
+            .text_menu_session
+            .dismiss_on_event(event);
 
         let text_layout = self.text_layout(layout);
         let mut trailing_icon_layout = None;
@@ -1048,31 +1022,18 @@ where
             self.always_active,
         );
 
-        // On Wayland: if right-click just set context_menu_position, create a popup instead.
-        #[cfg(all(wayland_platform, feature = "winit"))]
-        if matches!(
-            crate::app::cosmic::WINDOWING_SYSTEM.get(),
-            Some(crate::app::cosmic::WindowingSystem::Wayland)
-        ) {
-            if !self.external_text_menu {
-                let state = tree.state.downcast_ref::<State>();
-                if let Some(click_position) = state.context_menu_position {
-                    use crate::widget::text_context_menu::TextMenuTarget;
-                    let context = self.text_menu_context(tree);
-                    let menu_bar_state = state.menu_bar_state.clone();
-                    let pending_action = state.pending_action.clone();
-                    crate::widget::text_context_menu::create_text_context_popup(
-                        click_position,
-                        context,
-                        &menu_bar_state,
-                        &pending_action,
-                        renderer,
-                        viewport,
-                        cursor_position,
-                        self.window_id,
-                    );
-                    tree.state.downcast_mut::<State>().context_menu_position = None;
-                }
+        if !self.external_text_menu {
+            use crate::widget::text_context_menu::{TextMenuTarget, stock_view};
+            if let Some(at) = self.take_text_menu_request(tree) {
+                let view = stock_view(self.text_menu_context(tree));
+                tree.state.downcast_mut::<State>().text_menu_session.open(
+                    view,
+                    at,
+                    renderer,
+                    viewport,
+                    cursor_position,
+                    self.window_id,
+                );
             }
         }
 
@@ -3054,7 +3015,7 @@ pub(crate) enum DndOfferState {
 pub(crate) struct DndOfferState;
 
 /// The state of a [`TextInput`].
-#[derive(Default, Clone)]
+#[derive(Default)]
 #[must_use]
 pub struct State {
     pub tracked_value: Value,
@@ -3079,8 +3040,39 @@ pub struct State {
     scroll_offset: f32,
     context_menu_position: Option<iced_core::Point>,
     clipboard_has_text: bool,
-    pub(crate) menu_bar_state: crate::widget::menu::MenuBarState,
-    pub(crate) pending_action: crate::widget::text_context_menu::PendingAction,
+    pub(crate) text_menu_session: crate::widget::text_context_menu::TextMenuSession,
+}
+
+// Drag-and-drop snapshots retain editing state, but never share the source's
+// menu owner: removing a drag icon must not cancel the original source menu.
+impl Clone for State {
+    fn clone(&self) -> Self {
+        Self {
+            tracked_value: self.tracked_value.clone(),
+            value: self.value.clone(),
+            placeholder: self.placeholder.clone(),
+            label: self.label.clone(),
+            helper_text: self.helper_text.clone(),
+            dirty: self.dirty,
+            is_secure: self.is_secure,
+            is_read_only: self.is_read_only,
+            emit_unfocus: self.emit_unfocus,
+            select_on_focus: self.select_on_focus,
+            double_click_select_delimiter: self.double_click_select_delimiter,
+            is_focused: self.is_focused,
+            dragging_state: self.dragging_state.clone(),
+            dnd_offer: self.dnd_offer.clone(),
+            is_pasting: self.is_pasting.clone(),
+            last_click: self.last_click,
+            cursor: self.cursor,
+            preedit: self.preedit.clone(),
+            keyboard_modifiers: self.keyboard_modifiers,
+            scroll_offset: self.scroll_offset,
+            context_menu_position: self.context_menu_position,
+            clipboard_has_text: self.clipboard_has_text,
+            text_menu_session: Default::default(),
+        }
+    }
 }
 
 impl std::fmt::Debug for State {
@@ -3175,8 +3167,7 @@ impl State {
             dirty: false,
             context_menu_position: None,
             clipboard_has_text: false,
-            menu_bar_state: crate::widget::menu::MenuBarState::default(),
-            pending_action: crate::widget::text_context_menu::pending_action(),
+            text_menu_session: Default::default(),
         }
     }
 

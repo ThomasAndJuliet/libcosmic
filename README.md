@@ -119,6 +119,17 @@ Stock menus use the same executor. Input paste preserves native control-characte
 filtering and `on_paste` precedence; editor edits emit `on_action` immediately,
 leaving the application responsible for `Content::perform`.
 
+`TextMenuSession` owns a source's presentation and generation-checked mailbox.
+Capture `text_context_menu::current_window_id()` when constructing a wrapper,
+keep one session in its retained tree, and call `open` with resolved
+`TextMenuView` roots. Keep custom messages alongside the returned generation;
+`take_choice` returns that generation with `Edit(TextAction)` or `Custom(index)`.
+Take choices before forwarding source events, then call `dismiss_on_event`.
+Use `overlay` for the fallback presentation; native popups use the existing
+runtime pipeline. Dropping the session cancels its surface and rejects late
+choices. The owner is not cloneable; input drag snapshots get a fresh session.
+
+
 Focused regressions reuse the headless tiny-skia selection fixtures:
 
 ```sh

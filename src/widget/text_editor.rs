@@ -8,7 +8,6 @@ pub use iced_widget::text_editor::{
     Position, Selection, State, Status, Style, StyleFn,
 };
 
-use crate::widget::menu::MenuBarState;
 use crate::widget::text_context_menu::{TextAction, TextKind, TextMenuContext, TextMenuTarget};
 use iced_core::widget::text::HasSelectableText;
 
@@ -31,8 +30,7 @@ pub struct TextEditor<'a, Message> {
 }
 
 struct EditorWrapperState {
-    menu_bar_state: MenuBarState,
-    pending_action: crate::widget::text_context_menu::PendingAction,
+    text_menu_session: crate::widget::text_context_menu::TextMenuSession,
 }
 
 impl<'a, Message: Clone + 'static> TextEditor<'a, Message> {
@@ -155,17 +153,6 @@ impl<'a, Message: Clone + 'static> TextEditor<'a, Message> {
         self.inner = self.inner.style(style);
         self
     }
-
-    fn uses_popup_context_menu(&self) -> bool {
-        #[cfg(all(wayland_platform, feature = "winit"))]
-        if matches!(
-            crate::app::cosmic::WINDOWING_SYSTEM.get(),
-            Some(crate::app::cosmic::WindowingSystem::Wayland)
-        ) {
-            return true;
-        }
-        false
-    }
 }
 
 /// Creates a new [`TextEditor`] from the given [`Content`].
@@ -201,8 +188,7 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, crate::Renderer
     fn state(&self) -> tree::State {
         if self.has_context_menu {
             tree::State::new(EditorWrapperState {
-                menu_bar_state: MenuBarState::default(),
-                pending_action: crate::widget::text_context_menu::pending_action(),
+                text_menu_session: Default::default(),
             })
         } else {
             ew::<Message>(&self.inner).state()
@@ -279,14 +265,18 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, crate::Renderer
         viewport: &Rectangle,
     ) {
         if self.has_context_menu {
-            let pending = tree
-                .state
-                .downcast_ref::<EditorWrapperState>()
-                .pending_action
-                .clone();
-            if let Some(action) = crate::widget::text_context_menu::take_pending_action(&pending) {
+            if let Some(action) = crate::widget::text_context_menu::take_stock_action(
+                &mut tree
+                    .state
+                    .downcast_mut::<EditorWrapperState>()
+                    .text_menu_session,
+            ) {
                 self.execute_text_menu_action(tree, action, clipboard, shell);
             }
+            tree.state
+                .downcast_mut::<EditorWrapperState>()
+                .text_menu_session
+                .dismiss_on_event(event);
             ew_mut::<Message>(&mut self.inner).update(
                 &mut tree.children[0],
                 event,
@@ -310,43 +300,15 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, crate::Renderer
                 crate::widget::text_input::notify_focus_change();
             }
 
-            #[cfg(wayland_platform)]
-            if !self.external_text_menu && self.uses_popup_context_menu() {
-                if self
-                    .inner
-                    .context_menu_position(&tree.children[0])
-                    .is_some()
-                {
-                    let context = self.text_menu_context(tree);
-                    let click_position =
-                        self.inner.context_menu_position(&tree.children[0]).unwrap();
-                    let wrapper_state = tree.state.downcast_ref::<EditorWrapperState>();
-                    let menu_bar_state = wrapper_state.menu_bar_state.clone();
-                    let pending_action = wrapper_state.pending_action.clone();
-
-                    crate::widget::text_context_menu::create_text_context_popup(
-                        click_position,
-                        context,
-                        &menu_bar_state,
-                        &pending_action,
-                        renderer,
-                        viewport,
-                        cursor,
-                        self.window_id,
-                    );
-
-                    self.inner
-                        .set_context_menu_position(&mut tree.children[0], None);
+            if !self.external_text_menu {
+                if let Some(at) = self.take_text_menu_request(tree) {
+                    let view =
+                        crate::widget::text_context_menu::stock_view(self.text_menu_context(tree));
+                    tree.state
+                        .downcast_mut::<EditorWrapperState>()
+                        .text_menu_session
+                        .open(view, at, renderer, viewport, cursor, self.window_id);
                 }
-
-                // Dismiss popup on outside click / Escape.
-                let wrapper_state = tree.state.downcast_ref::<EditorWrapperState>();
-                let menu_bar_state = wrapper_state.menu_bar_state.clone();
-                crate::widget::text_context_menu::dismiss_popup_on_event(
-                    &menu_bar_state,
-                    event,
-                    self.window_id,
-                );
             }
         } else {
             ew_mut::<Message>(&mut self.inner).update(
@@ -380,22 +342,13 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, crate::Renderer
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, crate::Theme, crate::Renderer>> {
         if self.has_context_menu {
-            if !self.external_text_menu && !self.uses_popup_context_menu() {
-                use iced_core::widget::text::HasSelectableText;
-                let inner_tree = &mut tree.children[0];
-                if self.inner.context_menu_position(inner_tree).is_some() {
-                    let menu_bar_state = tree
-                        .state
-                        .downcast_ref::<EditorWrapperState>()
-                        .menu_bar_state
-                        .clone();
-                    let inner_tree = &mut tree.children[0];
-                    return crate::widget::text_context_menu::context_menu_overlay(
-                        &mut self.inner,
-                        inner_tree,
-                        translation,
-                        menu_bar_state,
-                    );
+            if !self.external_text_menu {
+                let session = &mut tree
+                    .state
+                    .downcast_mut::<EditorWrapperState>()
+                    .text_menu_session;
+                if session.is_open() {
+                    return session.overlay(translation);
                 }
             }
 

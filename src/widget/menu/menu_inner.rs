@@ -496,17 +496,68 @@ impl<'b, Message: Clone + 'static> Menu<'b, Message> {
         overlay::Element::new(Box::new(self))
     }
 
+    /// Forwards the hovered row's overlay without requiring unique ownership
+    /// of the menu's shared row elements or retained widget tree.
+    pub(crate) fn child_overlay(
+        &mut self,
+        layout: Layout<'_>,
+        renderer: &crate::Renderer,
+    ) -> Option<overlay::Element<'static, Message, crate::Theme, crate::Renderer>> {
+        if !self.tree.is_current() {
+            return None;
+        }
+        let shared_tree = self.tree.clone();
+        let candidate = shared_tree.inner.with_data_mut(|state| {
+            if !state.open {
+                return None;
+            }
+            let depth = if self.is_overlay {
+                state.menu_states.len().checked_sub(1)?
+            } else {
+                self.depth
+            };
+            let root = *state.active_root.first()?;
+            let menu_state = state.menu_states.get(depth)?;
+            let index = menu_state.index?;
+            let mut menu_root = self.menu_roots.get_mut(root)?;
+            for next in state.active_root.iter().take(depth + 1).skip(1) {
+                menu_root = menu_root.children.get_mut(*next)?;
+            }
+            let row = menu_root.children.get_mut(index)?;
+            let tree_index = row.index;
+            let tree = state
+                .tree
+                .children
+                .get_mut(root)?
+                .children
+                .get_mut(tree_index)?;
+            let node = menu_state.layout_single(
+                Point::ORIGIN - layout.position(),
+                index,
+                renderer,
+                row,
+                tree,
+            );
+            Some(MenuRowOverlay {
+                row: row.item.clone(),
+                tree: shared_tree.clone(),
+                root,
+                tree_index,
+                node,
+                viewport: layout.bounds(),
+            })
+        })?;
+        candidate.with_overlay(renderer, |_| ())?;
+        Some(overlay::Element::new(Box::new(candidate)))
+    }
+
     /// Brings the open menu levels in line with the menu tree this menu
     /// shows now, which may have changed while they were open: each level
     /// takes its item slots again ([`MenuBounds::refresh`]); a hovered
     /// item past the end of its level is no longer hovered; a submenu
     /// whose item is gone, or is no longer a folder, closes with the levels
     /// below it; and when the root itself is gone the menu closes.
-    fn reconcile(
-        &self,
-        data: &mut super::menu_bar::MenuBarStateInner,
-        renderer: &crate::Renderer,
-    ) {
+    fn reconcile(&self, data: &mut super::menu_bar::MenuBarStateInner, renderer: &crate::Renderer) {
         let Some(&root) = data.active_root.first() else {
             return;
         };
@@ -1032,6 +1083,126 @@ impl<'b, Message: Clone + 'static> Menu<'b, Message> {
         });
     }
 }
+// A menu snapshot shares its rows, so a borrowed child overlay cannot escape
+// the row's RefCell. Recreate that overlay for each operation while retaining
+// the same native row widget and Tree. No overlay state or app message is copied.
+struct MenuRowOverlay<Message> {
+    row: crate::widget::RcElementWrapper<Message>,
+    tree: MenuBarState,
+    root: usize,
+    tree_index: usize,
+    node: Node,
+    viewport: Rectangle,
+}
+
+impl<Message: Clone + 'static> MenuRowOverlay<Message> {
+    fn with_overlay<T>(
+        &self,
+        renderer: &crate::Renderer,
+        f: impl FnOnce(&mut dyn overlay::Overlay<Message, crate::Theme, crate::Renderer>) -> T,
+    ) -> Option<T> {
+        if !self.tree.is_current() {
+            return None;
+        }
+        self.tree.inner.with_data_mut(|state| {
+            if !state.open {
+                return None;
+            }
+            let tree = state
+                .tree
+                .children
+                .get_mut(self.root)?
+                .children
+                .get_mut(self.tree_index)?;
+            self.row.element.with_data_mut(|element| {
+                let mut overlay = element.as_widget_mut().overlay(
+                    tree,
+                    Layout::new(&self.node),
+                    renderer,
+                    &self.viewport,
+                    Vector::ZERO,
+                )?;
+                Some(f(overlay.as_overlay_mut()))
+            })
+        })
+    }
+}
+
+impl<Message: Clone + 'static> overlay::Overlay<Message, crate::Theme, crate::Renderer>
+    for MenuRowOverlay<Message>
+{
+    fn layout(&mut self, renderer: &crate::Renderer, bounds: Size) -> Node {
+        self.with_overlay(renderer, |overlay| overlay.layout(renderer, bounds))
+            .unwrap_or_else(|| Node::new(Size::ZERO))
+    }
+
+    fn draw(
+        &self,
+        renderer: &mut crate::Renderer,
+        theme: &crate::Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: Cursor,
+    ) {
+        // Recreate the child overlay before borrowing the renderer for drawing.
+        if !self.tree.is_current() {
+            return;
+        }
+        self.tree.inner.with_data_mut(|state| {
+            if !state.open {
+                return;
+            }
+            let Some(tree) = state
+                .tree
+                .children
+                .get_mut(self.root)
+                .and_then(|tree| tree.children.get_mut(self.tree_index))
+            else {
+                return;
+            };
+            self.row.element.with_data_mut(|element| {
+                if let Some(overlay) = element.as_widget_mut().overlay(
+                    tree,
+                    Layout::new(&self.node),
+                    renderer,
+                    &self.viewport,
+                    Vector::ZERO,
+                ) {
+                    overlay
+                        .as_overlay()
+                        .draw(renderer, theme, style, layout, cursor);
+                }
+            });
+        });
+    }
+
+    fn update(
+        &mut self,
+        event: &event::Event,
+        layout: Layout<'_>,
+        cursor: Cursor,
+        renderer: &crate::Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+    ) {
+        let _ = self.with_overlay(renderer, |overlay| {
+            overlay.update(event, layout, cursor, renderer, clipboard, shell)
+        });
+    }
+
+    fn mouse_interaction(
+        &self,
+        layout: Layout<'_>,
+        cursor: Cursor,
+        renderer: &crate::Renderer,
+    ) -> mouse::Interaction {
+        self.with_overlay(renderer, |overlay| {
+            overlay.mouse_interaction(layout, cursor, renderer)
+        })
+        .unwrap_or_default()
+    }
+}
+
 impl<Message: Clone + 'static> overlay::Overlay<Message, crate::Theme, crate::Renderer>
     for Menu<'_, Message>
 {
@@ -1068,6 +1239,14 @@ impl<Message: Clone + 'static> overlay::Overlay<Message, crate::Theme, crate::Re
         cursor: mouse::Cursor,
     ) {
         self.draw(renderer, theme, style, layout, cursor);
+    }
+
+    fn overlay<'a>(
+        &'a mut self,
+        layout: Layout<'a>,
+        renderer: &crate::Renderer,
+    ) -> Option<overlay::Element<'a, Message, crate::Theme, crate::Renderer>> {
+        self.child_overlay(layout, renderer)
     }
 
     fn mouse_interaction(
@@ -1128,7 +1307,8 @@ impl<Message: std::clone::Clone + 'static> Widget<Message, crate::Theme, crate::
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
-        self.tree.close_outdated_popups(self.on_surface_action.as_ref(), shell);
+        self.tree
+            .close_outdated_popups(self.on_surface_action.as_ref(), shell);
         let new_root = self.update(event, layout, cursor, renderer, clipboard, shell);
 
         #[cfg(wayland_platform)]
@@ -1290,6 +1470,17 @@ impl<Message: std::clone::Clone + 'static> Widget<Message, crate::Theme, crate::
                 ),
             ));
         }
+    }
+
+    fn overlay<'a>(
+        &'a mut self,
+        _tree: &'a mut Tree,
+        layout: Layout<'a>,
+        renderer: &crate::Renderer,
+        _viewport: &Rectangle,
+        _translation: Vector,
+    ) -> Option<overlay::Element<'a, Message, crate::Theme, crate::Renderer>> {
+        self.child_overlay(layout, renderer)
     }
 
     fn mouse_interaction(
