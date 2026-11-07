@@ -543,3 +543,55 @@ fn text_menu_external_presentation_preserves_native_requests() {
     let mut plain = widget::text("plain").selectable();
     external_menu_request(&mut plain, &renderer);
 }
+
+#[test]
+fn named_selectable_text_preserves_its_selection_through_tree_reconciliation() {
+    use iced_core::widget::tree::NAMED;
+    let renderer = renderer();
+    let limits = Limits::new(Size::ZERO, Size::new(260.0, 80.0));
+    for (context_menu, external) in [(true, false), (true, true), (false, false)] {
+        let id = Id::new("named-selectable-text");
+        let target = || {
+            let mut text =
+                widget::selectable_text("keep this selection").context_menu(context_menu);
+            <_ as Widget<MenuMessage, Theme, crate::Renderer>>::set_id(&mut text, id.clone());
+            if external {
+                <_ as TextMenuTarget<MenuMessage>>::use_external_text_menu(&mut text);
+            }
+            text
+        };
+        let mut old = target();
+        let mut tree = target_tree(&mut old);
+        let _ = <_ as Widget<MenuMessage, Theme, crate::Renderer>>::layout(
+            &mut old, &mut tree, &renderer, &limits,
+        );
+        let mut clipboard = MenuClipboard::default();
+        menu_action(&mut old, &mut tree, TextAction::SelectAll, &mut clipboard);
+
+        // This is the extraction/reconciliation cycle used by UserInterface::build.
+        NAMED.with(|named| *named.borrow_mut() = tree.take_all_named());
+        let mut rebuilt = target();
+        tree.diff(&mut rebuilt as &mut dyn Widget<MenuMessage, Theme, crate::Renderer>);
+        let _ = <_ as Widget<MenuMessage, Theme, crate::Renderer>>::layout(
+            &mut rebuilt,
+            &mut tree,
+            &renderer,
+            &limits,
+        );
+        NAMED.with(|named| named.borrow_mut().clear());
+        menu_action(&mut rebuilt, &mut tree, TextAction::Copy, &mut clipboard);
+        assert_eq!(
+            clipboard.writes,
+            ["keep this selection"],
+            "named native text state retains selection with stock, external or disabled menus"
+        );
+        assert_eq!(tree.id, (!context_menu).then_some(id.clone()));
+        if context_menu {
+            assert_eq!(
+                tree.children[0].id,
+                Some(id),
+                "the native text child is the sole owner of the name"
+            );
+        }
+    }
+}
