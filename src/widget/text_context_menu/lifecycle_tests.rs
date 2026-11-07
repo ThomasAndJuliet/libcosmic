@@ -99,6 +99,22 @@ fn custom_view(command: usize) -> TextMenuView {
     }
 }
 
+fn popup_fixture<Message: Clone + 'static>(
+    request: PopupRequest,
+    renderer: &crate::Renderer,
+    limits: &Limits,
+) -> (TextContextMenuPopup<Message>, Tree, iced_core::layout::Node) {
+    use iced_core::widget::Widget;
+    let mut popup = TextContextMenuPopup {
+        menu: request.menu,
+        handle: request.handle,
+        _phantom: std::marker::PhantomData,
+    };
+    let mut tree = Tree::new(&popup as &dyn Widget<Message, crate::Theme, crate::Renderer>);
+    let node = popup.layout(&mut tree, renderer, limits);
+    (popup, tree, node)
+}
+
 fn escape_event() -> event::Event {
     use iced_core::keyboard::{Event, Key, Location, Modifiers, key};
     event::Event::Keyboard(Event::KeyPressed {
@@ -121,18 +137,9 @@ fn late_custom_choice_and_done_cannot_touch_a_successor_generation() {
     let parent = window::Id::unique();
     let first_id = queue_view(parent, &mut session, &renderer, custom_view(0));
     let first = take_popup_requests(|id| id == parent).pop().unwrap();
-    let mut old_popup: TextContextMenuPopup<()> = TextContextMenuPopup {
-        menu: first.menu,
-        handle: first.handle,
-        _phantom: std::marker::PhantomData,
-    };
-    let mut tree = Tree::new(&old_popup as &dyn Widget<(), crate::Theme, crate::Renderer>);
     let bounds = Rectangle::with_size(Size::new(400.0, 300.0));
-    let node = old_popup.layout(
-        &mut tree,
-        &renderer,
-        &Limits::new(Size::ZERO, bounds.size()),
-    );
+    let (mut old_popup, mut tree, node) =
+        popup_fixture::<()>(first, &renderer, &Limits::new(Size::ZERO, bounds.size()));
     let second_id = queue_view(parent, &mut session, &renderer, custom_view(0));
     let second = take_popup_requests(|id| id == parent).pop().unwrap();
     assert_ne!(old_popup.handle.generation, second.handle.generation);
@@ -376,17 +383,8 @@ fn disabled_row_tooltips_are_forwarded_by_native_popup_and_fallback_overlay() {
             let parent = window::Id::unique();
             queue_view(parent, &mut session, &renderer, tooltip_view());
             let request = take_popup_requests(|id| id == parent).pop().unwrap();
-            let mut popup: TextContextMenuPopup<()> = TextContextMenuPopup {
-                menu: request.menu,
-                handle: request.handle,
-                _phantom: std::marker::PhantomData,
-            };
-            let mut tree = Tree::new(&popup as &dyn Widget<(), crate::Theme, crate::Renderer>);
-            let node = popup.layout(
-                &mut tree,
-                &renderer,
-                &Limits::new(Size::ZERO, bounds.size()),
-            );
+            let (mut popup, mut tree, node) =
+                popup_fixture::<()>(request, &renderer, &Limits::new(Size::ZERO, bounds.size()));
             let layout = Layout::new(&node);
             let at = layout
                 .children()
@@ -515,14 +513,8 @@ fn native_popup_choices_run_once_on_source_redraw_with_live_permissions() {
         );
         let request = take_popup_requests(|id| id == parent).pop().unwrap();
         assert_eq!(request.settings.id, popup_id);
-        let mut popup: TextContextMenuPopup<String> = TextContextMenuPopup {
-            menu: request.menu,
-            handle: request.handle,
-            _phantom: std::marker::PhantomData,
-        };
-        let mut popup_tree =
-            Tree::new(&popup as &dyn Widget<String, crate::Theme, crate::Renderer>);
-        let popup_node = popup.layout(&mut popup_tree, &renderer, &limits);
+        let (mut popup, mut popup_tree, popup_node) =
+            popup_fixture::<String>(request, &renderer, &limits);
         let popup_layout = Layout::new(&popup_node);
         // Derive the row's hit target from the real menu layout.
         let row = if choice == TextAction::Cut { 0 } else { 1 };
@@ -728,31 +720,15 @@ fn a_replaced_text_popup_cannot_dismiss_its_successor() {
     let parent = window::Id::unique();
     let first_id = queue(parent, &mut state, &renderer);
     let first = take_popup_requests(|id| id == parent).pop().unwrap();
-    let mut popup: TextContextMenuPopup<()> = TextContextMenuPopup {
-        menu: first.menu,
-        handle: first.handle,
-        _phantom: std::marker::PhantomData,
-    };
-    let mut tree = Tree::new(&popup as &dyn Widget<(), crate::Theme, crate::Renderer>);
     let limits = Limits::new(Size::ZERO, Size::new(400.0, 300.0));
-    let node = popup.layout(&mut tree, &renderer, &limits);
+    let (mut popup, mut tree, node) = popup_fixture::<()>(first, &renderer, &limits);
     let second_id = queue(parent, &mut state, &renderer);
     assert_ne!(first_id, second_id);
     let mut messages = Vec::new();
     let mut shell = Shell::new(&mut messages);
     popup.update(
         &mut tree,
-        &event::Event::Keyboard(iced_core::keyboard::Event::KeyPressed {
-            key: iced_core::keyboard::Key::Named(iced_core::keyboard::key::Named::Escape),
-            modified_key: iced_core::keyboard::Key::Named(iced_core::keyboard::key::Named::Escape),
-            physical_key: iced_core::keyboard::key::Physical::Code(
-                iced_core::keyboard::key::Code::Escape,
-            ),
-            location: iced_core::keyboard::Location::Standard,
-            modifiers: iced_core::keyboard::Modifiers::empty(),
-            text: None,
-            repeat: false,
-        }),
+        &escape_event(),
         Layout::new(&node),
         mouse::Cursor::Unavailable,
         &renderer,
