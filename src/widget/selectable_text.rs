@@ -1,5 +1,6 @@
 use crate::Renderer;
 use crate::widget::menu::MenuBarState;
+use crate::widget::text_context_menu::{TextAction, TextMenuContext, TextMenuTarget};
 
 use iced::window;
 use iced_core::event::Event;
@@ -31,6 +32,7 @@ pub struct SelectableText<'a> {
     inner: InnerText<'a>,
     selectable: bool,
     context_menu: bool,
+    external_text_menu: bool,
     window_id: window::Id,
 }
 
@@ -40,9 +42,10 @@ impl<'a> SelectableText<'a> {
     /// Selection and the context menu are enabled by default.
     pub fn new(content: impl iced_core::text::IntoFragment<'a>) -> Self {
         Self {
-            inner: InnerText::new(content),
+            inner: InnerText::new(content).selectable(),
             selectable: true,
             context_menu: true,
+            external_text_menu: false,
             window_id: crate::widget::text_context_menu::current_window_id(),
         }
     }
@@ -53,6 +56,7 @@ impl<'a> SelectableText<'a> {
     /// suppresses the context menu, which has nothing to act on).
     pub fn selectable(mut self, enabled: bool) -> Self {
         self.selectable = enabled;
+        self.inner.set_selectable(enabled);
         self
     }
 
@@ -183,9 +187,10 @@ impl<'a> SelectableText<'a> {
 impl<'a> From<InnerText<'a>> for SelectableText<'a> {
     fn from(inner: InnerText<'a>) -> Self {
         Self {
-            inner,
+            inner: inner.selectable(),
             selectable: true,
             context_menu: true,
+            external_text_menu: false,
             window_id: crate::widget::text_context_menu::current_window_id(),
         }
     }
@@ -322,6 +327,16 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, Renderer> for S
         viewport: &Rectangle,
     ) {
         if self.shows_context_menu() {
+            let pending = tree
+                .state
+                .downcast_ref::<TextWrapperState>()
+                .pending_action
+                .clone();
+            if let Some(action) = crate::widget::text_context_menu::take_pending_action(&pending) {
+                <Self as TextMenuTarget<Message>>::execute_text_menu_action(
+                    self, tree, action, clipboard, shell,
+                );
+            }
             w_mut::<Message>(&mut self.inner).update(
                 &mut tree.children[0],
                 event,
@@ -334,7 +349,7 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, Renderer> for S
             );
 
             #[cfg(wayland_platform)]
-            if self.uses_popup_context_menu() {
+            if !self.external_text_menu && self.uses_popup_context_menu() {
                 use iced_core::widget::text::HasSelectableText;
 
                 if self
@@ -342,8 +357,7 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, Renderer> for S
                     .context_menu_position(&tree.children[0])
                     .is_some()
                 {
-                    let selected_text = self.inner.selected_text(&tree.children[0]);
-                    let has_selection = selected_text.is_some();
+                    let context = <Self as TextMenuTarget<Message>>::text_menu_context(self, tree);
                     let click_position =
                         self.inner.context_menu_position(&tree.children[0]).unwrap();
                     let wrapper_state = tree.state.downcast_ref::<TextWrapperState>();
@@ -352,11 +366,7 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, Renderer> for S
 
                     crate::widget::text_context_menu::create_text_context_popup(
                         click_position,
-                        selected_text,
-                        false,
-                        has_selection,
-                        self.inner.has_text(&tree.children[0]),
-                        self.inner.clipboard_has_text(&tree.children[0]),
+                        context,
                         &menu_bar_state,
                         &pending_action,
                         renderer,
@@ -367,23 +377,6 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, Renderer> for S
 
                     self.inner
                         .set_context_menu_position(&mut tree.children[0], None);
-                }
-
-                {
-                    let wrapper_state = tree.state.downcast_ref::<TextWrapperState>();
-                    let pending_action = wrapper_state.pending_action.clone();
-                    if let Some(action) =
-                        crate::widget::text_context_menu::take_pending_action(&pending_action)
-                    {
-                        match action {
-                            crate::widget::text_context_menu::TextCtxAction::Copy => {}
-                            crate::widget::text_context_menu::TextCtxAction::SelectAll => {
-                                self.inner.select_all(&mut tree.children[0]);
-                                shell.request_redraw();
-                            }
-                            _ => {}
-                        }
-                    }
                 }
 
                 let wrapper_state = tree.state.downcast_ref::<TextWrapperState>();
@@ -425,7 +418,8 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, Renderer> for S
         _viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, crate::Theme, Renderer>> {
-        if self.shows_context_menu() && !self.uses_popup_context_menu() {
+        if self.shows_context_menu() && !self.external_text_menu && !self.uses_popup_context_menu()
+        {
             let menu_bar_state = tree
                 .state
                 .downcast_ref::<TextWrapperState>()
@@ -433,9 +427,8 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, Renderer> for S
                 .clone();
             let inner_tree = &mut tree.children[0];
             crate::widget::text_context_menu::context_menu_overlay(
-                &self.inner,
+                &mut self.inner,
                 inner_tree,
-                None,
                 translation,
                 menu_bar_state,
             )
@@ -485,27 +478,7 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, Renderer> for S
 
 impl<'a, Message: Clone + 'static> From<SelectableText<'a>> for crate::Element<'a, Message> {
     fn from(text: SelectableText<'a>) -> Self {
-        let SelectableText {
-            inner,
-            selectable,
-            context_menu,
-            window_id,
-        } = text;
-        // Apply selection to the inner widget here, at the last moment before
-        // it becomes part of the tree. iced's `Text::selectable()` is one-way
-        // (it can only set the flag), so deferring until conversion lets
-        // `selectable(false)` work without ever having set it.
-        let inner = if selectable {
-            inner.selectable()
-        } else {
-            inner
-        };
-        Self::new(SelectableText {
-            inner,
-            selectable,
-            context_menu,
-            window_id,
-        })
+        Self::new(text)
     }
 }
 
@@ -537,3 +510,43 @@ selectable_preset!(caption_heading);
 selectable_preset!(body);
 selectable_preset!(caption);
 selectable_preset!(monotext);
+
+impl<Message> TextMenuTarget<Message> for SelectableText<'_> {
+    fn use_external_text_menu(&mut self) {
+        self.external_text_menu = true;
+    }
+
+    fn take_text_menu_request(&self, tree: &mut Tree) -> Option<iced_core::Point> {
+        let inner_tree = if self.shows_context_menu() {
+            &mut tree.children[0]
+        } else {
+            tree
+        };
+        <InnerText<'_> as TextMenuTarget<Message>>::take_text_menu_request(&self.inner, inner_tree)
+    }
+
+    fn text_menu_context(&self, tree: &Tree) -> TextMenuContext {
+        let inner_tree = if self.shows_context_menu() {
+            &tree.children[0]
+        } else {
+            tree
+        };
+        <InnerText<'_> as TextMenuTarget<Message>>::text_menu_context(&self.inner, inner_tree)
+    }
+
+    fn execute_text_menu_action(
+        &mut self,
+        tree: &mut Tree,
+        action: TextAction,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+    ) {
+        let inner_tree = if self.shows_context_menu() {
+            &mut tree.children[0]
+        } else {
+            tree
+        };
+        self.inner
+            .execute_text_menu_action(inner_tree, action, clipboard, shell);
+    }
+}
