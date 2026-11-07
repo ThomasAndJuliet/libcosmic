@@ -422,7 +422,14 @@ impl<'a, Message: Clone + 'static> Widget<Message, crate::Theme, Renderer> for S
     }
 
     fn id(&self) -> Option<iced_core::widget::Id> {
-        w::<Message>(&self.inner).id()
+        // The wrapped text owns its named state in the child tree. Giving
+        // this wrapper the same id would let restoration consume that state
+        // for TextWrapperState instead of the native text selection.
+        if self.shows_context_menu() {
+            None
+        } else {
+            w::<Message>(&self.inner).id()
+        }
     }
 
     fn set_id(&mut self, id: iced_core::widget::Id) {
