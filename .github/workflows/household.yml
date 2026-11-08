@@ -1,14 +1,18 @@
 name: Household fork
 
-# The fork's own tests, on neo only. Upstream's workflows are removed: they
-# would run on GitHub-hosted runners, which this private repository does not
-# use. Only Tom's and Juliet's pushes to this repository run; anything else
-# skips rather than fall back to a hosted runner.
+# The fork's full tests, on neo only. This repository is public: this workflow
+# has no pull-request trigger and never runs for one, so nothing from a fork
+# reaches the self-hosted runner. Only Tom's and Juliet's pushes to this
+# repository run; anything else skips rather than fall back to a hosted
+# runner. Pull requests are checked by pull-request.yml on hosted runners.
 
 on:
   push:
     branches: [household, 'fork/**']
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -36,7 +40,7 @@ jobs:
           sudo apt-get install -y pkg-config libxkbcommon-dev libfontconfig1-dev libfreetype6-dev libglvnd-dev libinput-dev libvulkan-dev libwayland-dev libx11-dev libx11-xcb-dev libxcursor-dev libxi-dev libxrandr-dev libasound2-dev libdbus-1-dev weston
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
       - name: Record test environment
         run: |
