@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Which key presses a focused text input types, sent through the widget's
 //! real update as a window sends them. The window reports a key's character
 //! whatever modifiers are held: xkb gives "x" for Alt+x and "=" for Ctrl+=.

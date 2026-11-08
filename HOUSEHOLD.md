@@ -1,8 +1,8 @@
 # The household fork of libcosmic
 
-This branch, `household`, is pop-os/libcosmic with the changes the home-apps need. It is private. Nothing here goes upstream: pop-os accepts no AI-written code. So every change is carried and rebased for as long as we need it, and changes should stay small and additive.
+This branch, `household`, is pop-os/libcosmic with the changes the home-apps need. The repository is public so that the apps built on it can be built by anyone. Nothing here goes upstream: pop-os accepts no AI-written code. So every change is carried and rebased for as long as we need it, and changes should stay small and additive.
 
-Coordination between Tom's and Juliet's agents happens in `neo:/srv/household/agent-notes/libcosmic.md`; post there before and after changing this branch. The backlog is Juliet's list in ThomasAndJuliet/household-ui, `proposals/libcosmic.md`, together with `INVENTORY.md` in the staging area (`neo:/mnt/disk-array/Share/Projects/libcosmic-fork/`).
+Tom and Juliet coordinate changes to this branch in the household's own notes, which are not part of this repository, before and after changing it. Outside contributors are welcome to open an issue or pull request, but changes are carried only if the home-apps need them.
 
 ## Layout
 
@@ -212,7 +212,20 @@ Juliet, 25 Oct: "the fork carries small bug fixes". Each commit has an `Origin:`
 
 ## CI
 
-`.github/workflows/household.yml` runs on neo's `neo-ubuntu` runner for pushes to `household` and `fork/**` by Tom or Juliet; nothing runs on GitHub-hosted runners. Upstream's workflows are removed. It runs:
+The repository is public, so CI treats every pull request as untrusted.
+
+- `.github/workflows/pull-request.yml` runs for every pull request, including
+  those from forks, on GitHub-hosted runners with read-only permissions and no
+  secrets. It builds and tests the library without the Wayland-compositor
+  tests below. It does not use `pull_request_target`.
+- `.github/workflows/household.yml` is the full fork suite. It runs on the household's
+  self-hosted runner (`neo-ubuntu`) and only on pushes to `household` and
+  `fork/**` by Tom or Juliet (and manual dispatch by a collaborator with
+  write access). It has no pull-request trigger, so a pull request, from a fork
+  or not, never reaches that runner. Do not add one.
+- Upstream's workflows are removed.
+
+The full suite runs:
 
 - libcosmic's library tests;
 - a check with the apps' feature set;
@@ -222,7 +235,7 @@ Juliet, 25 Oct: "the fork carries small bug fixes". Each commit has an `Origin:`
 - iced's widget state reconciliation, widget tests (the list's rows after a rebuild), renderer failure tests and SVG tests;
 - a check of winit's Wayland backend.
 
-Push a `fork/<topic>` branch to get a run before merging it into `household`.
+Push a `fork/<topic>` branch (collaborators only) to get a run of the full suite before merging it into `household`.
 
 The root `Cargo.lock` records the dependency resolution used by these tests.
 Keep it in Git and use `--locked` for root-workspace commands: unpinned git
@@ -247,3 +260,12 @@ its standalone Wayland check continues to resolve dependencies independently.
 3. Re-apply the iced and winit commits with `git format-patch` and `git am -3 --directory=iced` (or `winit`).
 4. Drop any change that upstream has since made itself, and say so in the shared note.
 5. Build at least cosmic-term and deductum against the result before moving any app's pin.
+
+## Licence
+
+libcosmic is under the Mozilla Public License 2.0 (`LICENSE`). The subtrees keep
+their own licences: `iced/` is MIT (`iced/LICENSE`), `winit/` is Apache-2.0
+(`winit/LICENSE`) and `cosmic-icons/` has its own `cosmic-icons/LICENSE`. The
+household's additions to libcosmic's own files are under the same licence as the
+file they change. Files the household added carry an
+`SPDX-License-Identifier: MPL-2.0` line.
