@@ -172,6 +172,9 @@ impl text::Paragraph for () {
 }
 
 impl text::Editor for () {
+    fn range_bounds(&self, _range: std::ops::Range<text::editor::Position>) -> Vec<Rectangle> {
+        Vec::new()
+    }
     type Font = Font;
 
     fn with_text(_text: &str) -> Self {}

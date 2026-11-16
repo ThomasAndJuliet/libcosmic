@@ -96,6 +96,7 @@ jobs:
       - name: iced renderers
         working-directory: iced
         run: |
+          cargo test --locked -p iced_graphics --lib annotation_tests
           cargo test --locked -p iced_wgpu --lib failure_tests
           cargo test --locked -p iced_tiny_skia --lib failure_tests
           cargo test --locked -p iced_tiny_skia --features svg --lib

@@ -269,3 +269,25 @@ their own licences: `iced/` is MIT (`iced/LICENSE`), `winit/` is Apache-2.0
 household's additions to libcosmic's own files are under the same licence as the
 file they change. Files the household added carry an
 `SPDX-License-Identifier: MPL-2.0` line.
+
+## Text range annotations
+
+`text_editor::Annotation` decorates a current range with a background and an
+optional foreground. `TextEditor::annotations` forwards through the COSMIC
+wrapper, preserving its existing selection, context menu, keyboard and undo
+behaviour. Ranges use line numbers and UTF-8 byte columns, as `Cursor` does.
+The caller updates ranges when the text changes.
+
+`Content::range_bounds` returns visible, scrolled and wrapped rectangles for a
+range without changing the cursor or selection. It lets a caller associate a
+hover description with the same text it highlighted. Annotations are clipped
+to the editor's text area and the ordinary selection is painted above them.
+Background-only annotations share the normal single text pass. An explicit
+foreground changes the default glyph colour; syntax-highlighter colours keep
+their existing precedence.
+
+The `iced_graphics` `annotation_tests` compare those rectangles with native
+selection geometry, including wrapping and scrolling, and verify that reads
+leave the caret and copied selection unchanged. Applications should also test
+their range mapping and inspect selected and unselected annotations in their
+actual editor themes.
