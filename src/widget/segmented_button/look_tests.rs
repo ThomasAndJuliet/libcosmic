@@ -10,7 +10,6 @@ use iced::advanced::renderer::Headless;
 use iced_core::widget::operation::{self, Outcome};
 use iced_core::{Background, Color, Event, Length, Point, Size, clipboard, mouse, renderer};
 use iced_runtime::user_interface::{Cache, UserInterface};
-use std::borrow::Cow;
 
 const WIDTH: u32 = 400;
 const HEIGHT: u32 = 80;
@@ -60,14 +59,7 @@ fn control(model: &SingleSelectModel, style: Style) -> crate::Element<'_, ()> {
 
 /// Draws `control` in `theme`, after `then`; returns the RGBA pixels
 fn render(control: crate::Element<'_, ()>, theme: &crate::Theme, then: Then) -> Vec<u8> {
-    {
-        let mut font_system = iced::advanced::graphics::text::font_system()
-            .write()
-            .unwrap();
-        font_system.load_font(Cow::Borrowed(
-            &include_bytes!("../../../res/open-sans/OpenSans-Regular.ttf")[..],
-        ));
-    }
+    crate::font::load_test_fonts();
     let mut renderer = iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
         iced::Font::default(),
         iced::Pixels(14.0),

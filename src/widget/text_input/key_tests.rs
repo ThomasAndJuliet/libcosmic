@@ -31,6 +31,7 @@ struct Field {
 impl Field {
     /// A field holding `value`, clicked into
     fn focused(value: &str) -> Self {
+        crate::font::load_test_fonts();
         let renderer =
             iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
                 iced::Font::default(),

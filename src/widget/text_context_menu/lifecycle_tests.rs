@@ -36,6 +36,7 @@ fn window(id: window::Id) -> Cosmic<WindowApp> {
 }
 
 fn renderer() -> crate::Renderer {
+    crate::font::load_test_fonts();
     iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
         iced::Font::default(),
         iced::Pixels(14.0),

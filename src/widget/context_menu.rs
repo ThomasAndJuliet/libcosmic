@@ -739,6 +739,7 @@ mod open_menu_change_tests {
     const SIZE: Size = Size::new(420.0, 900.0);
 
     fn renderer() -> crate::Renderer {
+        crate::font::load_test_fonts();
         iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
             iced::Font::default(),
             iced::Pixels(14.0),
@@ -877,6 +878,7 @@ mod tests {
     #[test]
     fn a_scrolled_session_menu_is_anchored_at_the_window_cursor() {
         _ = WINDOWING_SYSTEM.set(WindowingSystem::Wayland);
+        crate::font::load_test_fonts();
         let mut renderer = iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
             iced::Font::default(),
             iced::Pixels(14.0),
@@ -1036,6 +1038,7 @@ mod tests {
     }
 
     fn renderer() -> crate::Renderer {
+        crate::font::load_test_fonts();
         iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
             iced::Font::default(),
             iced::Pixels(14.0),

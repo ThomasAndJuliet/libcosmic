@@ -238,7 +238,6 @@ mod tests {
     use iced_core::mouse::Cursor;
     use iced_core::renderer::Style;
     use iced_runtime::user_interface::{Cache, UserInterface};
-    use std::borrow::Cow;
 
     const WIDTH: u32 = 400;
     const HEIGHT: u32 = 48;
@@ -248,14 +247,7 @@ mod tests {
 
     /// Two tabs of the same wide word, drawn in `theme`; returns the RGBA pixels
     fn drawn(model: &SingleSelectModel, theme: &crate::Theme) -> Vec<u8> {
-        {
-            let mut font_system = iced::advanced::graphics::text::font_system()
-                .write()
-                .unwrap();
-            font_system.load_font(Cow::Borrowed(
-                &include_bytes!("../../../res/open-sans/OpenSans-Regular.ttf")[..],
-            ));
-        }
+        crate::font::load_test_fonts();
         let mut renderer = iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
             iced::Font::default(),
             iced::Pixels(14.0),

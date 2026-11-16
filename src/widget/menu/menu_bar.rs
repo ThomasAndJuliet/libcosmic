@@ -1003,6 +1003,7 @@ mod tests {
     }
 
     fn renderer() -> Renderer {
+        crate::font::load_test_fonts();
         iced::futures::executor::block_on(<Renderer as Headless>::new(
             iced::Font::default(),
             iced::Pixels(14.0),
@@ -1514,6 +1515,7 @@ mod popup_state_tests {
 
     #[test]
     fn an_open_menu_survives_its_roots_being_replaced() {
+        crate::font::load_test_fonts();
         let renderer = iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
             iced::Font::default(), iced::Pixels(14.0), Some("tiny-skia"),
         )).expect("a headless renderer");

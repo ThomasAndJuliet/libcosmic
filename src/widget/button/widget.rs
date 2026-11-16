@@ -1172,6 +1172,7 @@ mod overlay_tests {
     }
 
     fn frame(at: Option<Point>) -> Vec<u8> {
+        crate::font::load_test_fonts();
         let mut renderer = iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
             iced::Font::default(),
             iced::Pixels(14.0),
