@@ -84,6 +84,31 @@ impl Editor {
 }
 
 impl editor::Editor for Editor {
+    fn range_bounds(&self, range: std::ops::Range<Position>) -> Vec<Rectangle> {
+        let buffer = self.buffer();
+        let start =
+            cosmic_text::Cursor::new(range.start.line, range.start.column);
+        let end = cosmic_text::Cursor::new(range.end.line, range.end.column);
+        if (start.line, start.index) >= (end.line, end.index) {
+            return Vec::new();
+        }
+        let height = buffer.metrics().line_height;
+        buffer
+            .layout_runs()
+            .filter(|run| run.line_i >= start.line && run.line_i <= end.line)
+            .flat_map(|run| {
+                run.highlight(start, end)
+                    .filter(|(_, width)| *width > 0.0)
+                    .map(move |(x, width)| Rectangle {
+                        x,
+                        y: run.line_top,
+                        width,
+                        height,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
     type Font = Font;
 
     fn with_text(text: &str) -> Self {
@@ -766,5 +791,54 @@ where
         cosmic_text::BufferRef::Owned(buffer) => buffer,
         cosmic_text::BufferRef::Borrowed(buffer) => buffer,
         cosmic_text::BufferRef::Arc(_buffer) => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+mod annotation_tests {
+    use super::*;
+    use crate::core::text::{Editor as _, highlighter::PlainText};
+
+    #[test]
+    fn annotation_ranges_match_selection_without_moving_the_editor() {
+        let mut editor = Editor::with_text(
+            "Friday or Monday — αβ\nAnother line with wrapping words",
+        );
+        editor.update(
+            Size::new(100.0, 48.0),
+            Font::default(),
+            Pixels(16.0),
+            LineHeight::default(),
+            Wrapping::WordOrGlyph,
+            &mut PlainText,
+        );
+        let start = Position { line: 0, column: 7 };
+        let end = Position {
+            line: 1,
+            column: 12,
+        };
+        editor.move_to(Cursor {
+            position: end,
+            selection: Some(start),
+        });
+        let Selection::Range(expected) = editor.selection() else {
+            panic!("a range is selected")
+        };
+        assert!(!expected.is_empty());
+        let before = editor.cursor();
+        assert_eq!(editor.range_bounds(start..end), expected);
+        assert_eq!(editor.cursor(), before);
+        let copied = editor.copy();
+        let unrelated =
+            Position { line: 0, column: 0 }..Position { line: 0, column: 6 };
+        let _ = editor.range_bounds(unrelated);
+        assert_eq!(editor.cursor(), before);
+        assert_eq!(editor.copy(), copied);
+        editor.perform(Action::Scroll { lines: 1 });
+        let Selection::Range(expected) = editor.selection() else {
+            panic!()
+        };
+        assert_eq!(editor.range_bounds(start..end), expected);
+        assert_eq!(editor.cursor(), before);
     }
 }

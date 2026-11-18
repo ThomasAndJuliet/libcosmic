@@ -39,3 +39,20 @@ pub fn bold() -> Font {
 pub fn mono() -> Font {
     Font::from(crate::config::monospace_font())
 }
+
+/// All headless comparison fixtures share the same interface faces before
+/// shaping. Loading fonts midway through another test's before/after pair
+/// changes fallback selection and invalidates the comparison.
+#[cfg(test)]
+pub(crate) fn load_test_fonts() {
+    static LOADED: std::sync::Once = std::sync::Once::new();
+    LOADED.call_once(|| {
+        let mut fonts = iced::advanced::graphics::text::font_system().write().unwrap();
+        for font in [
+            &include_bytes!("../res/open-sans/OpenSans-Regular.ttf")[..],
+            &include_bytes!("../res/open-sans/OpenSans-Semibold.ttf")[..],
+        ] {
+            fonts.load_font(std::borrow::Cow::Borrowed(font));
+        }
+    });
+}

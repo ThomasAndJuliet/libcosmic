@@ -1,6 +1,8 @@
 .cargo
 .idea
 Cargo.lock
+# Keep the household CI dependency resolution; consumers use their own lockfile.
+!/Cargo.lock
 target
 vendor
 vendor.tar

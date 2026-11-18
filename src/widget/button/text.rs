@@ -179,6 +179,7 @@ mod tests {
     use iced_core::{Length, Rectangle, Size};
 
     fn laid_out(mut element: Element<'static, ()>, max: Size) -> Node {
+        crate::font::load_test_fonts();
         let renderer = iced::futures::executor::block_on(
             <crate::Renderer as iced_core::renderer::Headless>::new(
                 crate::font::default(),

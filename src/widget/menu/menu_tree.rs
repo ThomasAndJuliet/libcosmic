@@ -604,25 +604,8 @@ mod tests {
     const WIDTH: f32 = 300.0;
     const HEIGHT: f32 = 36.0;
 
-    /// The interface font's weights, as an app loads them at start, so that the
-    /// regular and semibold labels are measured with their own faces
-    fn load_fonts() {
-        static LOADED: std::sync::Once = std::sync::Once::new();
-        LOADED.call_once(|| {
-            let mut font_system = iced::advanced::graphics::text::font_system()
-                .write()
-                .unwrap();
-            for font in [
-                &include_bytes!("../../../res/open-sans/OpenSans-Regular.ttf")[..],
-                &include_bytes!("../../../res/open-sans/OpenSans-Semibold.ttf")[..],
-            ] {
-                font_system.load_font(Cow::Borrowed(font));
-            }
-        });
-    }
-
     fn renderer() -> crate::Renderer {
-        load_fonts();
+        crate::font::load_test_fonts();
         iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
             iced::Font::default(),
             iced::Pixels(14.0),

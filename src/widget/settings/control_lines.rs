@@ -292,6 +292,7 @@ mod tests {
         height of its control";
 
     fn laid_out(mut element: Element<'static, ()>, width: f32) -> Node {
+        crate::font::load_test_fonts();
         let renderer = iced::futures::executor::block_on(<Renderer as Headless>::new(
             Font::default(),
             Pixels(14.0),

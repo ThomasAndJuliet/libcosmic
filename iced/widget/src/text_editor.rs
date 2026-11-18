@@ -141,6 +141,16 @@ pub struct TextEditor<
     last_status: Option<Status>,
     selected_text_color: Option<Box<dyn Fn(&Theme, &Style) -> Color + 'a>>,
     selection_fill: Option<Box<dyn Fn(&Theme, &Style) -> Color + 'a>>,
+    annotations: Vec<Annotation>,
+}
+
+/// A presentation-only range in a text editor. It never changes text,
+/// selection or editing behaviour. Ranges follow the current content.
+#[derive(Debug, Clone)]
+pub struct Annotation {
+    pub range: std::ops::Range<Position>,
+    pub background: Color,
+    pub foreground: Option<Color>,
 }
 
 impl<'a, Message, Theme, Renderer>
@@ -175,6 +185,7 @@ where
             last_status: None,
             selected_text_color: None,
             selection_fill: None,
+            annotations: Vec::new(),
         }
     }
 
@@ -323,7 +334,15 @@ where
             last_status: self.last_status,
             selected_text_color: self.selected_text_color,
             selection_fill: self.selection_fill,
+            annotations: self.annotations,
         }
+    }
+
+    /// Decorates current text ranges without replacing the editor or its
+    /// selection/undo handling. The ordinary selection is drawn above these.
+    pub fn annotations(mut self, annotations: Vec<Annotation>) -> Self {
+        self.annotations = annotations;
+        self
     }
 
     /// Sets the closure to produce key bindings on key presses.
@@ -486,6 +505,15 @@ where
     /// Returns the current cursor position of the [`Content`].
     pub fn cursor(&self) -> Cursor {
         self.0.borrow().editor.cursor()
+    }
+
+    /// Visible range bounds in editor-local text coordinates. This read is
+    /// independent of the current selection and does not move the caret.
+    pub fn range_bounds(
+        &self,
+        range: std::ops::Range<Position>,
+    ) -> Vec<Rectangle> {
+        self.0.borrow().editor.range_bounds(range)
     }
 
     /// Returns the amount of lines of the [`Content`].
@@ -1113,6 +1141,26 @@ where
 
         let text_bounds = bounds.shrink(self.padding);
 
+        let translation = text_bounds.position() - Point::ORIGIN;
+        // Background-only annotations need just the ordinary single text
+        // pass, even for a document with many short wrapped fragments.
+        for annotation in &self.annotations {
+            for range in internal.editor.range_bounds(annotation.range.clone())
+            {
+                if let Some(range) =
+                    text_bounds.intersection(&(range + translation))
+                {
+                    renderer.fill_quad(
+                        renderer::Quad {
+                            bounds: range,
+                            ..renderer::Quad::default()
+                        },
+                        annotation.background,
+                    );
+                }
+            }
+        }
+
         if internal.editor.is_empty() {
             if let Some(placeholder) = self.placeholder.clone() {
                 renderer.fill_text(
@@ -1144,7 +1192,34 @@ where
             );
         }
 
-        let translation = text_bounds.position() - Point::ORIGIN;
+        for annotation in &self.annotations {
+            let Some(foreground) = annotation.foreground else {
+                continue;
+            };
+            for range in internal.editor.range_bounds(annotation.range.clone())
+            {
+                let Some(range) =
+                    text_bounds.intersection(&(range + translation))
+                else {
+                    continue;
+                };
+                renderer.with_layer(range, |renderer| {
+                    renderer.fill_quad(
+                        renderer::Quad {
+                            bounds: range,
+                            ..renderer::Quad::default()
+                        },
+                        annotation.background,
+                    );
+                    renderer.fill_editor(
+                        &internal.editor,
+                        text_bounds.position(),
+                        foreground,
+                        text_bounds,
+                    );
+                });
+            }
+        }
 
         if let Some(focus) = state.focus.as_ref() {
             match internal.editor.selection() {

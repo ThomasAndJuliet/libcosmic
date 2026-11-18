@@ -4,8 +4,8 @@
 //! A multi-line text editor
 
 pub use iced_widget::text_editor::{
-    Action, Binding, Catalog, Content, Cursor, Edit, Id, KeyPress, Line, LineEnding, Motion,
-    Position, Selection, State, Status, Style, StyleFn,
+    Action, Annotation, Binding, Catalog, Content, Cursor, Edit, Id, KeyPress, Line, LineEnding,
+    Motion, Position, Selection, State, Status, Style, StyleFn,
 };
 
 use crate::widget::text_context_menu::{TextAction, TextKind, TextMenuContext, TextMenuTarget};
@@ -55,6 +55,11 @@ impl<'a, Message: Clone + 'static> TextEditor<'a, Message> {
 
     pub fn id(mut self, id: impl Into<iced_core::widget::Id>) -> Self {
         self.inner = self.inner.id(id);
+        self
+    }
+
+    pub fn annotations(mut self, annotations: Vec<Annotation>) -> Self {
+        self.inner = self.inner.annotations(annotations);
         self
     }
 

@@ -23,6 +23,10 @@ pub trait Editor: Sized + Default {
     /// Returns the current [`Selection`] of the [`Editor`].
     fn selection(&self) -> Selection;
 
+    /// Visible rectangles for a range, without changing the cursor,
+    /// selection, scroll position or undo state. Columns are UTF-8 bytes.
+    fn range_bounds(&self, range: std::ops::Range<Position>) -> Vec<Rectangle>;
+
     /// Returns the current selected text of the [`Editor`].
     fn copy(&self) -> Option<String>;
 

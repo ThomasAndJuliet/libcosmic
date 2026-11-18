@@ -29,7 +29,8 @@ pub struct CloseCondition {
     /// Close menus when the cursor clicks outside the check bounds
     pub click_outside: bool,
 
-    /// Close menus when the cursor clicks inside the check bounds
+    /// Close menus when the cursor clicks inside the check bounds,
+    /// except on an entry with a submenu
     pub click_inside: bool,
 }
 
@@ -221,6 +222,16 @@ impl Aod {
     }
 }
 
+/// How far a menu at `position` must move to lie wholly in `0..viewport`.
+/// A menu that is larger than the viewport stays where it is, and scrolls.
+fn shift_into_view(position: f32, size: f32, viewport: f32) -> f32 {
+    if size > viewport {
+        0.0
+    } else {
+        position.clamp(0.0, viewport - size) - position
+    }
+}
+
 /// A part of a menu where items are displayed.
 ///
 /// When the bounds of a menu exceed the viewport,
@@ -269,7 +280,11 @@ impl MenuBounds {
         let (children_position, offset_position) = {
             let (cp, op) = aod.resolve(view_parent_bounds, children_size, viewport_size);
             if is_overlay {
-                (cp - overlay_offset, op - overlay_offset)
+                let shift = Vector::new(
+                    shift_into_view(cp.x, children_size.width, viewport_size.width),
+                    shift_into_view(cp.y, children_size.height, viewport_size.height),
+                );
+                (cp + shift - overlay_offset, op + shift - overlay_offset)
             } else {
                 (Point::ORIGIN, op - overlay_offset)
             }
@@ -688,6 +703,33 @@ impl<'b, Message: Clone + 'static> Menu<'b, Message> {
         })
     }
 
+    /// Whether the pointer is on an entry with a submenu: the hovered item of the
+    /// menu under the pointer. In the window that is the deepest menu holding the
+    /// pointer, as a submenu is drawn over its parent; a native popup is one level.
+    fn on_folder(
+        &self,
+        state: &super::menu_bar::MenuBarStateInner,
+        overlay_cursor: Point,
+    ) -> bool {
+        let level = if self.is_overlay {
+            state
+                .menu_states
+                .iter()
+                .rposition(|ms| ms.menu_bounds.children_bounds.contains(overlay_cursor))
+        } else {
+            Some(self.depth)
+        };
+        let item = level.and_then(|level| {
+            let index = state.menu_states.get(level)?.index?;
+            let (root, path) = state.active_root.get(..=level)?.split_first()?;
+            let menu = path.iter().try_fold(self.menu_roots.get(*root)?, |mt, i| {
+                mt.children.get(*i)
+            })?;
+            menu.children.get(index)
+        });
+        item.is_some_and(|item| !item.children.is_empty())
+    }
+
     /// Close every menu and, on Wayland, destroy the root popup this menu belongs to.
     /// Used when clicking outside a menu.
     #[allow(clippy::too_many_lines)]
@@ -826,10 +868,15 @@ impl<'b, Message: Clone + 'static> Menu<'b, Message> {
             }
 
             Mouse(ButtonPressed(Left)) | Touch(FingerPressed { .. }) => {
-                self.tree.inner.with_data_mut(|data| {
+                let on_folder = self.tree.inner.with_data_mut(|data| {
                     data.pressed = true;
                     data.view_cursor = view_cursor;
+                    self.on_folder(data, overlay_cursor)
                 });
+                // No widget takes this press, and a context menu closes on any it sees
+                if on_folder {
+                    shell.capture_event();
+                }
             }
 
             Mouse(CursorMoved { position }) | Touch(FingerMoved { position, .. }) => {
@@ -863,6 +910,11 @@ impl<'b, Message: Clone + 'static> Menu<'b, Message> {
             Mouse(ButtonReleased(_)) | Touch(FingerLifted { .. }) => {
                 self.tree.inner.with_data_mut(|state| {
                     state.pressed = false;
+
+                    // Hovering opened the submenu, and the click leaves it open
+                    if self.on_folder(state, overlay_cursor) {
+                        return;
+                    }
 
                     // process close condition
                     if state.open

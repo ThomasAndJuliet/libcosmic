@@ -27,6 +27,7 @@ fn rgb(colour: impl Into<Color>) -> u32 {
 }
 
 fn renderer() -> crate::Renderer {
+    crate::font::load_test_fonts();
     iced::futures::executor::block_on(<crate::Renderer as Headless>::new(
         crate::font::default(),
         Pixels(14.0),

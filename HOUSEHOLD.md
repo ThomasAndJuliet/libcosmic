@@ -1,8 +1,8 @@
 # The household fork of libcosmic
 
-This branch, `household`, is pop-os/libcosmic with the changes the home-apps need. It is private. Nothing here goes upstream: pop-os accepts no AI-written code. So every change is carried and rebased for as long as we need it, and changes should stay small and additive.
+This branch, `household`, is pop-os/libcosmic with the changes the home-apps need. The repository is public so that the apps built on it can be built by anyone. Nothing here goes upstream: pop-os accepts no AI-written code. So every change is carried and rebased for as long as we need it, and changes should stay small and additive.
 
-Coordination between Tom's and Juliet's agents happens in `neo:/srv/household/agent-notes/libcosmic.md`; post there before and after changing this branch. The backlog is Juliet's list in ThomasAndJuliet/household-ui, `proposals/libcosmic.md`, together with `INVENTORY.md` in the staging area (`neo:/mnt/disk-array/Share/Projects/libcosmic-fork/`).
+Tom and Juliet coordinate changes to this branch in the household's own notes, which are not part of this repository, before and after changing it. Outside contributors are welcome to open an issue or pull request, but changes are carried only if the home-apps need them.
 
 ## Layout
 
@@ -68,9 +68,14 @@ Each commit says where it came from, using an `Origin:` line or a household-ui p
   colour for the text. The household colour rule for selections lives in
   the apps, through `household-tones` (Juliet, 25 Oct: "keep libcosmic close
   to the original").
+- **text_input (bug fix):** a key held with Alt or Super is not typed and is
+  not captured, so it reaches the app's shortcuts. Ctrl keys are refused as
+  before, and stay captured. Shift, AltGr (which xkb reports as level 3, not
+  Alt), dead keys and input methods still type; Option still types on macOS.
 - **context_menu:** native popups are anchored at the window cursor in scrolled views;
   menus inherit the window currently building them, as text-field menus do,
-  instead of targeting the reserved placeholder window.
+  instead of targeting the reserved placeholder window; the Esc that closes a
+  menu is captured, so an app's Esc shortcut does not run too.
 - **segmented_button:**
   - the tab-drag candidate is forgotten on click;
   - a `handle_event` refactor;
@@ -90,6 +95,9 @@ Each commit says where it came from, using an `Origin:` line or a household-ui p
   the tick, in the row's icon colour (the accent text colour on a selected
   row): a radio mark for one choice of several (Juliet, 19 Oct: "we also
   need a radio box like icon").
+  A click on an entry with a submenu leaves the menu open, in a menu bar or
+  a context menu, in the window or as native popups: `click_inside` closes
+  on every other entry.
 - **theme:** hidden `set_active`, for headless rendering in tests.
 - **cosmic-theme:** the background layer's hover and selected take its own
   overlay again, not the one the primary block leaves behind (white in light
@@ -120,6 +128,7 @@ Each commit carries the number of the household-ui proposal it answers, or an `I
   - the menu bar diffs its roots' own trees, which fixes a panic when the roots change kind (#24);
   - the press that closes a menu is swallowed, for both in-window and native popups (#17).
   - an open menu whose items change under it takes its items' slots again from the tree it shows: a shorter menu no longer indexes past its end (a panic in Lollypop, 25 Oct), and a longer one, or one whose items changed kind, is no longer drawn in the old slots; a submenu whose item is gone closes.
+  - an in-window menu that fits the window but not beside its anchor shifts just enough to lie wholly inside it; one that fits there, and one taller than the window, open as before.
 - **button:** overlays of a button's content (a tooltip on a row's title, the heart's tooltip in a row) open at the content, not a button's offset away: the button passes the translation on as iced's containers do.
 - **cosmic-theme:**
   - a partially saved theme is filled from its own mode's defaults;
@@ -203,7 +212,20 @@ Juliet, 25 Oct: "the fork carries small bug fixes". Each commit has an `Origin:`
 
 ## CI
 
-`.github/workflows/household.yml` runs on neo's `neo-ubuntu` runner for pushes to `household` and `fork/**` by Tom or Juliet; nothing runs on GitHub-hosted runners. Upstream's workflows are removed. It runs:
+The repository is public, so CI treats every pull request as untrusted.
+
+- `.github/workflows/pull-request.yml` runs for every pull request, including
+  those from forks, on GitHub-hosted runners with read-only permissions and no
+  secrets. It builds and tests the library without the Wayland-compositor
+  tests below. It does not use `pull_request_target`.
+- `.github/workflows/household.yml` is the full fork suite. It runs on the household's
+  self-hosted runner (`neo-ubuntu`) and only on pushes to `household` and
+  `fork/**` by Tom or Juliet (and manual dispatch by a collaborator with
+  write access). It has no pull-request trigger, so a pull request, from a fork
+  or not, never reaches that runner. Do not add one.
+- Upstream's workflows are removed.
+
+The full suite runs:
 
 - libcosmic's library tests;
 - a check with the apps' feature set;
@@ -213,7 +235,18 @@ Juliet, 25 Oct: "the fork carries small bug fixes". Each commit has an `Origin:`
 - iced's widget state reconciliation, widget tests (the list's rows after a rebuild), renderer failure tests and SVG tests;
 - a check of winit's Wayland backend.
 
-Push a `fork/<topic>` branch to get a run before merging it into `household`.
+Push a `fork/<topic>` branch (collaborators only) to get a run of the full suite before merging it into `household`.
+
+The root `Cargo.lock` records the dependency resolution used by these tests.
+Keep it in Git and use `--locked` for root-workspace commands: unpinned git
+dependencies can change their package names or APIs independently of this
+fork. This lockfile affects builds from this workspace only. Applications
+depending on the fork continue to resolve through their own root lockfile;
+their manifest patches and fork revision pins are unchanged.
+
+The excluded `iced/` workspace has its own tracked `Cargo.lock` and already
+uses `--locked`. The excluded `winit/` workspace has no tracked lockfile;
+its standalone Wayland check continues to resolve dependencies independently.
 
 ## Rebasing onto upstream
 
@@ -227,3 +260,34 @@ Push a `fork/<topic>` branch to get a run before merging it into `household`.
 3. Re-apply the iced and winit commits with `git format-patch` and `git am -3 --directory=iced` (or `winit`).
 4. Drop any change that upstream has since made itself, and say so in the shared note.
 5. Build at least cosmic-term and deductum against the result before moving any app's pin.
+
+## Licence
+
+libcosmic is under the Mozilla Public License 2.0 (`LICENSE`). The subtrees keep
+their own licences: `iced/` is MIT (`iced/LICENSE`), `winit/` is Apache-2.0
+(`winit/LICENSE`) and `cosmic-icons/` has its own `cosmic-icons/LICENSE`. The
+household's additions to libcosmic's own files are under the same licence as the
+file they change. Files the household added carry an
+`SPDX-License-Identifier: MPL-2.0` line.
+
+## Text range annotations
+
+`text_editor::Annotation` decorates a current range with a background and an
+optional foreground. `TextEditor::annotations` forwards through the COSMIC
+wrapper, preserving its existing selection, context menu, keyboard and undo
+behaviour. Ranges use line numbers and UTF-8 byte columns, as `Cursor` does.
+The caller updates ranges when the text changes.
+
+`Content::range_bounds` returns visible, scrolled and wrapped rectangles for a
+range without changing the cursor or selection. It lets a caller associate a
+hover description with the same text it highlighted. Annotations are clipped
+to the editor's text area and the ordinary selection is painted above them.
+Background-only annotations share the normal single text pass. An explicit
+foreground changes the default glyph colour; syntax-highlighter colours keep
+their existing precedence.
+
+The `iced_graphics` `annotation_tests` compare those rectangles with native
+selection geometry, including wrapping and scrolling, and verify that reads
+leave the caret and copied selection unchanged. Applications should also test
+their range mapping and inspect selected and unselected annotations in their
+actual editor themes.
