@@ -24,10 +24,40 @@ mod platform;
 #[path = "settings/other.rs"]
 mod platform;
 
+use std::{fmt, sync::Arc};
+
+use raw_window_handle::{DisplayHandle, WindowHandle};
+
 use crate::Size;
 use crate::window::{Icon, Level, Position};
 
 pub use platform::PlatformSpecific;
+
+type NativeSetup = dyn Fn(DisplayHandle<'_>, WindowHandle<'_>) + Send + Sync;
+
+/// Runs after a native window is created and before iced presents any frame.
+#[derive(Clone)]
+pub struct NativeWindowSetup(Arc<NativeSetup>);
+
+impl NativeWindowSetup {
+    /// Creates a one-time native setup callback for a window.
+    pub fn new(
+        setup: impl Fn(DisplayHandle<'_>, WindowHandle<'_>) + Send + Sync + 'static,
+    ) -> Self {
+        Self(Arc::new(setup))
+    }
+
+    /// Runs the callback while both native handles are live.
+    pub fn run(&self, display: DisplayHandle<'_>, window: WindowHandle<'_>) {
+        (self.0)(display, window);
+    }
+}
+
+impl fmt::Debug for NativeWindowSetup {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeWindowSetup").finish_non_exhaustive()
+    }
+}
 
 /// The window settings of an application.
 #[derive(Debug, Clone)]
@@ -92,6 +122,9 @@ pub struct Settings {
     /// Platform specific settings.
     pub platform_specific: PlatformSpecific,
 
+    /// Optional native setup before the window's first presented frame.
+    pub native_setup: Option<NativeWindowSetup>,
+
     /// Whether the window will close when the user requests it, e.g. when a user presses the
     /// close button.
     ///
@@ -123,6 +156,7 @@ impl Default for Settings {
             icon: None,
             exit_on_close_request: true,
             platform_specific: PlatformSpecific::default(),
+            native_setup: None,
             resize_border: 8,
         }
     }
