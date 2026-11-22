@@ -32,7 +32,7 @@ pub use runtime::futures;
 use window_clipboard::mime::ClipboardStoreData;
 pub use winit;
 use winit::event::WindowEvent;
-use winit::raw_window_handle::HasWindowHandle;
+use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 #[cfg(feature = "a11y")]
 pub mod a11y;
@@ -400,6 +400,7 @@ where
                                     settings.exit_on_close_request;
 
                                 let visible = settings.visible;
+                                let native_setup = settings.native_setup.clone();
 
                                 #[cfg(target_arch = "wasm32")]
                                 let target =
@@ -445,6 +446,13 @@ where
                                         continue;
                                     }
                                 };
+
+                                if let Some(setup) = native_setup
+                                    && let (Ok(display), Ok(handle)) =
+                                        (window.display_handle(), window.window_handle())
+                                {
+                                    setup.run(display, handle);
+                                }
 
                                 #[cfg(target_os = "macos")]
                                 if let Some(position) = position {

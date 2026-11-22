@@ -22,6 +22,7 @@ a11y = ["iced_accessibility"]
 wayland = ["cctk"]
 
 [dependencies]
+raw-window-handle.workspace = true
 palette = "0.7"
 bitflags.workspace = true
 bytes.workspace = true
@@ -49,9 +50,6 @@ mime.workspace = true
 version = "0.1.0"
 path = "../accessibility"
 optional = true
-
-[target.'cfg(windows)'.dependencies]
-raw-window-handle.workspace = true
 
 [dev-dependencies]
 approx = "0.5"
